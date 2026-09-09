@@ -1,0 +1,8 @@
+[general]
+enabled = yes
+pretty = no
+
+[dograh]
+type = user
+read_only = no
+password = REPLACE_WITH_LONG_RANDOM_PASSWORD

@@ -10,6 +10,7 @@ import {
   CircleDollarSign,
   Database,
   FileText,
+  Headphones,
   Home,
   Key,
   LogOut,
@@ -138,6 +139,11 @@ const NAV_SECTIONS: SidebarNavSection[] = [
         title: "Agent Runs",
         url: "/usage",
         icon: TrendingUp,
+      },
+      {
+        title: "POC Calls",
+        url: "/poc/calls",
+        icon: Headphones,
       },
       {
         title: "Billing",

@@ -23,6 +23,7 @@ from pipecat.utils.enums import EndTaskReason
 from api.db import db_client
 from api.enums import ToolCategory, WorkflowRunMode
 from api.services.pipecat.audio_playback import play_audio, play_audio_loop
+from api.services.poc.native_tools import PocToolSession, get_native_tool_schema
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
 from api.services.telephony.external_pbx import resolve_external_pbx_field_mappings
 from api.services.telephony.factory import get_telephony_provider_for_run
@@ -103,6 +104,12 @@ class CustomToolManager:
 
     def __init__(self, engine: "PipecatEngine") -> None:
         self._engine = engine
+        self._poc_session: PocToolSession | None = None
+
+    async def close_poc_session(self) -> None:
+        if self._poc_session is not None:
+            await self._poc_session.aclose()
+            self._poc_session = None
 
     async def _play_config_message(
         self, config: dict, *, append_to_context: bool = False
@@ -208,6 +215,21 @@ class CustomToolManager:
                     schemas.extend(session.function_schemas(allowed))
                     continue
 
+                if tool.category == ToolCategory.NATIVE.value:
+                    function_name = (
+                        (tool.definition or {}).get("config", {}).get("function")
+                    )
+                    native = get_native_tool_schema(function_name)
+                    schemas.append(
+                        get_function_schema(
+                            function_name,
+                            native["description"],
+                            properties=native["properties"],
+                            required=native["required"],
+                        )
+                    )
+                    continue
+
                 raw_schema = tool_to_function_schema(tool)
                 function_name = raw_schema["function"]["name"]
 
@@ -290,6 +312,26 @@ class CustomToolManager:
                     )
                     continue
 
+                if tool.category == ToolCategory.NATIVE.value:
+                    function_name = (
+                        (tool.definition or {}).get("config", {}).get("function")
+                    )
+                    get_native_tool_schema(function_name)
+                    timeout_secs = (
+                        float(
+                            (tool.definition or {})
+                            .get("config", {})
+                            .get("timeout_ms", 8000)
+                        )
+                        / 1000
+                    )
+                    self._engine.llm.register_function(
+                        function_name,
+                        self._create_native_tool_handler(function_name),
+                        timeout_secs=timeout_secs,
+                    )
+                    continue
+
                 schema = tool_to_function_schema(tool)
                 function_name = schema["function"]["name"]
 
@@ -335,6 +377,12 @@ class CustomToolManager:
         elif tool.category == ToolCategory.TRANSFER_CALL.value:
             timeout_secs = self._transfer_handler_timeout_secs(tool)
             handler = self._create_transfer_call_handler(tool, function_name)
+        elif tool.category == ToolCategory.NATIVE.value:
+            timeout_ms = ((tool.definition or {}).get("config", {}) or {}).get(
+                "timeout_ms", 8000
+            )
+            timeout_secs = float(timeout_ms) / 1000
+            handler = self._create_native_tool_handler(function_name)
         else:
             timeout_ms = ((tool.definition or {}).get("config", {}) or {}).get(
                 "timeout_ms", 5000
@@ -343,6 +391,22 @@ class CustomToolManager:
             handler = self._create_http_tool_handler(tool, function_name)
 
         return handler, timeout_secs
+
+    def _create_native_tool_handler(self, function_name: str):
+        async def native_tool_handler(
+            function_call_params: FunctionCallParams,
+        ) -> None:
+            try:
+                if self._poc_session is None:
+                    self._poc_session = PocToolSession(self._engine)
+                result = await self._poc_session.execute(
+                    function_name, function_call_params.arguments
+                )
+            except ValueError as exc:
+                result = {"error": str(exc), "transfer_recommended": True}
+            await function_call_params.result_callback(result)
+
+        return native_tool_handler
 
     def _transfer_handler_timeout_secs(self, tool: Any) -> float:
         config = (tool.definition or {}).get("config", {}) or {}

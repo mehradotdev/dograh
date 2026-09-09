@@ -75,6 +75,7 @@ from api.services.pipecat.transcript_log_coordinator import TranscriptLogCoordin
 from api.services.pipecat.transport_setup import create_webrtc_transport
 from api.services.pipecat.worker_runner import run_pipeline_worker
 from api.services.pipecat.ws_sender_registry import get_ws_sender
+from api.services.poc.runtime import validate_poc_runtime
 from api.services.telephony import registry as telephony_registry
 from api.services.workflow.dto import ReactFlowDTO
 from api.services.workflow.initial_context import merge_external_initial_context
@@ -684,6 +685,29 @@ async def _run_pipeline_impl(
     # Detect realtime mode (speech-to-speech services like OpenAI Realtime, Gemini Live)
     is_realtime = user_config.is_realtime and user_config.realtime is not None
 
+    if is_realtime:
+        poc_runtime_configuration = {
+            "realtime_provider": user_config.realtime.provider,
+            "realtime_model": user_config.realtime.model,
+            "realtime_language": user_config.realtime.language,
+            "llm_provider": user_config.llm.provider,
+            "llm_model": user_config.llm.model,
+        }
+    else:
+        poc_runtime_configuration = {
+            "stt_provider": user_config.stt.provider,
+            "stt_model": user_config.stt.model,
+            "stt_language": user_config.stt.language,
+            "tts_provider": user_config.tts.provider,
+            "tts_model": user_config.tts.model,
+            "tts_language": user_config.tts.language,
+            "llm_provider": user_config.llm.provider,
+            "llm_model": user_config.llm.model,
+        }
+    validate_poc_runtime(
+        merged_call_context_vars.get("poc_engine"), poc_runtime_configuration
+    )
+
     # Create services based on user configuration
     if is_realtime:
         llm = create_realtime_llm_service(user_config, audio_config)
@@ -732,21 +756,9 @@ async def _run_pipeline_impl(
     if is_realtime:
         # llm_* refers to the side-channel text LLM (variable extraction,
         # voicemail detection); realtime_* is the speech-to-speech service.
-        runtime_configuration = {
-            "realtime_provider": user_config.realtime.provider,
-            "realtime_model": user_config.realtime.model,
-            "llm_provider": user_config.llm.provider,
-            "llm_model": user_config.llm.model,
-        }
+        runtime_configuration = poc_runtime_configuration
     else:
-        runtime_configuration = {
-            "stt_provider": user_config.stt.provider,
-            "stt_model": user_config.stt.model,
-            "tts_provider": user_config.tts.provider,
-            "tts_model": user_config.tts.model,
-            "llm_provider": user_config.llm.provider,
-            "llm_model": user_config.llm.model,
-        }
+        runtime_configuration = poc_runtime_configuration
     merged_call_context_vars = {
         **merged_call_context_vars,
         "runtime_configuration": runtime_configuration,

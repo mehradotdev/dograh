@@ -16,6 +16,7 @@ import json
 import signal
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Dict, Optional, Set
 from urllib.parse import urlparse
 
@@ -40,6 +41,8 @@ from api.services.call_concurrency import (
     call_concurrency,
 )
 from api.services.organization_preferences import external_pbx_integrations_enabled
+from api.services.poc.config import engine_daily_limit, engine_enabled
+from api.services.poc.phone import InvalidCallerNumber, normalize_indian_mobile
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony import ws_auth
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
@@ -73,6 +76,16 @@ _PERMANENT_FAILURE_THRESHOLD = 5  # consecutive non-retryable failures
 _TRANSIENT_FAILURE_WINDOW = 3600  # seconds of unbroken retryable failure
 _STABLE_CONNECTION_SECONDS = 30  # uptime that counts as proof the config works
 _FAILURE_LOG_INTERVAL = 900  # re-log an unchanged failure at most this often
+
+
+def _parse_stasis_args(app_args: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for arg in app_args:
+        for pair in arg.split(","):
+            if "=" in pair:
+                key, value = pair.split("=", 1)
+                parsed[key.strip()] = value.strip()
+    return parsed
 
 
 def _log_ari_failure(
@@ -502,6 +515,7 @@ class ARIConnection:
                 return
 
             app_args = event.get("args", [])
+            args_dict = _parse_stasis_args(app_args)
             caller = channel.get("caller", {})
             logger.info(
                 f"[ARI org={self.organization_id}] StasisStart: "
@@ -510,10 +524,12 @@ class ARIConnection:
                 f"args={app_args}"
             )
 
-            if channel_state == "Ring":
+            if channel_state == "Ring" or args_dict.get("direction") == "inbound":
                 # Inbound call — arrived from outside, not yet answered
                 asyncio.create_task(
-                    self._handle_inbound_stasis_start(channel_id, channel_state, event)
+                    self._handle_inbound_stasis_start(
+                        channel_id, channel_state, event, args_dict
+                    )
                 )
             else:
                 # Outbound call (state == "Up") — originated by us
@@ -531,13 +547,6 @@ class ARIConnection:
                     return
 
                 # Parse args to extract workflow context
-                args_dict = {}
-                for arg in app_args:
-                    for pair in arg.split(","):
-                        if "=" in pair:
-                            key, value = pair.split("=", 1)
-                            args_dict[key.strip()] = value.strip()
-
                 workflow_run_id = args_dict.get("workflow_run_id")
                 workflow_id = args_dict.get("workflow_id")
 
@@ -630,6 +639,14 @@ class ARIConnection:
         # answer returns 204 No Content on success, so empty dict is OK
         logger.info(f"[ARI org={self.organization_id}] Answered channel {channel_id}")
         return True
+
+    async def _return_to_dialplan_unavailable(self, channel_id: str) -> None:
+        await self._ari_request(
+            "POST",
+            f"/channels/{channel_id}/variable",
+            params={"variable": "POC_UNAVAILABLE", "value": "1"},
+        )
+        await self._ari_request("POST", f"/channels/{channel_id}/continue")
 
     async def _get_channel_var(self, channel_id: str, variable: str) -> str:
         """Read a channel variable/function via ARI. Returns '' if unset."""
@@ -790,7 +807,11 @@ class ARIConnection:
         return bridge_id
 
     async def _handle_inbound_stasis_start(
-        self, channel_id: str, channel_state: str, event: dict
+        self,
+        channel_id: str,
+        channel_state: str,
+        event: dict,
+        app_args: dict[str, str] | None = None,
     ):
         """Handle an inbound call (StasisStart with state=Ring).
 
@@ -802,28 +823,38 @@ class ARIConnection:
         called_number = channel.get("dialplan", {}).get("exten", "unknown")
         concurrency_slot = None
         workflow_run = None
+        app_args = app_args or {}
+        poc_engine = app_args.get("poc_engine")
+        try:
+            wfms_mobile = normalize_indian_mobile(caller_number)
+            caller_e164 = f"+91{wfms_mobile}"
+        except InvalidCallerNumber:
+            wfms_mobile = None
+            caller_e164 = None
 
         try:
             # 1. Resolve the workflow from the called extension via the
             #    telephony_phone_numbers row scoped to this connection's config.
-            phone_row = await db_client.find_active_phone_number_for_inbound(
-                self.organization_id, called_number, "ari"
+            phone_row = None
+            inbound_workflow_id = (
+                int(app_args["workflow_id"]) if app_args.get("workflow_id") else None
             )
-            if (
-                not phone_row
-                or phone_row.telephony_configuration_id
-                != self.telephony_configuration_id
-            ):
-                logger.warning(
-                    f"[ARI org={self.organization_id}] Inbound call to extension "
-                    f"{called_number} on channel {channel_id} — no matching phone "
-                    f"number registered for config {self.telephony_configuration_id}, "
-                    f"hanging up"
+            if inbound_workflow_id is None:
+                phone_row = await db_client.find_active_phone_number_for_inbound(
+                    self.organization_id, called_number, "ari"
                 )
-                await self._delete_channel(channel_id)
-                return
-
-            inbound_workflow_id = phone_row.inbound_workflow_id
+                if (
+                    not phone_row
+                    or phone_row.telephony_configuration_id
+                    != self.telephony_configuration_id
+                ):
+                    logger.warning(
+                        f"[ARI org={self.organization_id}] Inbound call to extension "
+                        f"{called_number} on channel {channel_id} has no registered route"
+                    )
+                    await self._delete_channel(channel_id)
+                    return
+                inbound_workflow_id = phone_row.inbound_workflow_id
             if not inbound_workflow_id:
                 logger.warning(
                     f"[ARI org={self.organization_id}] Inbound call to extension "
@@ -833,6 +864,25 @@ class ARIConnection:
                 )
                 await self._delete_channel(channel_id)
                 return
+
+            if poc_engine:
+                if not engine_enabled(poc_engine):
+                    await self._return_to_dialplan_unavailable(channel_id)
+                    return
+                daily_limit = engine_daily_limit(poc_engine)
+                midnight = datetime.now(UTC).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                used = await db_client.count_poc_calls_since(
+                    self.organization_id, poc_engine, midnight
+                )
+                if daily_limit <= 0 or used >= daily_limit:
+                    logger.info(
+                        f"[ARI org={self.organization_id}] POC route {poc_engine} "
+                        f"unavailable ({used}/{daily_limit})"
+                    )
+                    await self._return_to_dialplan_unavailable(channel_id)
+                    return
 
             # 2. Load workflow to get user_id and verify organization
             workflow = await db_client.get_workflow(
@@ -888,14 +938,19 @@ class ARIConnection:
                 call_type=CallType.INBOUND,
                 initial_context={
                     "caller_number": caller_number,
+                    "caller_e164": caller_e164,
+                    "wfms_mobile": wfms_mobile,
                     "called_number": called_number,
                     "direction": "inbound",
                     "provider": "ari",
                     "telephony_configuration_id": self.telephony_configuration_id,
                     "external_pbx_call": external_pbx_call,
+                    "poc_engine": poc_engine,
+                    "asterisk_call_id": app_args.get("asterisk_call_id") or channel_id,
                 },
                 gathered_context={
                     "call_id": call_id,
+                    "poc_engine": poc_engine,
                 },
                 organization_id=self.organization_id,
                 definition_id=run_inputs.definition_id,
@@ -928,7 +983,8 @@ class ARIConnection:
                 return
 
             # 5. Answer the inbound channel
-            await self._answer_channel(channel_id)
+            if channel_state == "Ring":
+                await self._answer_channel(channel_id)
 
             # 6. Delegate to the standard pipeline
             await self._handle_stasis_start(

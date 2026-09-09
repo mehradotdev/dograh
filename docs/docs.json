@@ -167,6 +167,7 @@
           {
             "group": "Deployment",
             "pages": [
+              "poc-ai-receptionist",
               "deployment/introduction",
               "deployment/docker",
               "deployment/authentication",

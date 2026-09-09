@@ -1,6 +1,7 @@
 from loguru import logger
 from pipecat.utils.run_context import set_current_run_id
 
+from api.services.poc.finalize import finalize_poc_run
 from api.services.telephony.external_pbx_writeback import (
     sync_external_pbx_call_record,
 )
@@ -34,6 +35,13 @@ async def process_workflow_completion(
         await run_integrations_post_workflow_run(_ctx, workflow_run_id)
     except Exception as e:
         logger.error(f"Error running integrations for workflow {workflow_run_id}: {e}")
+
+    try:
+        await finalize_poc_run(workflow_run_id)
+    except Exception as e:
+        logger.error(
+            f"Error finalizing POC metrics for workflow {workflow_run_id}: {e}"
+        )
 
     # Notify MPS after completion. MPS owns credit accounting.
     try:

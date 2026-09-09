@@ -1394,3 +1394,5 @@ class PipecatEngine:
         # Cancel any in-flight background summarization.
         if self._context_summarization_manager:
             await self._context_summarization_manager.cleanup()
+        if self._custom_tool_manager:
+            await self._custom_tool_manager.close_poc_session()

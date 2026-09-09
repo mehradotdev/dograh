@@ -504,6 +504,23 @@ class McpToolConfig(BaseModel):
         return v
 
 
+PocNativeFunction = Literal[
+    "get_caller",
+    "get_my_tickets",
+    "get_ticket_details",
+    "get_ticket_summary",
+    "prepare_support_ticket",
+    "create_support_ticket",
+]
+
+
+class NativeToolConfig(BaseModel):
+    """Fixed in-process function; cannot be redirected to an arbitrary URL."""
+
+    function: PocNativeFunction
+    timeout_ms: int = Field(default=8000, ge=1000, le=30000)
+
+
 class HttpApiToolDefinition(BaseModel):
     """Tool definition for HTTP API tools."""
 
@@ -543,12 +560,19 @@ class McpToolDefinition(BaseModel):
     config: McpToolConfig = Field(description="MCP server configuration.")
 
 
+class NativeToolDefinition(BaseModel):
+    schema_version: int = Field(default=1, description="Schema version.")
+    type: Literal["native"] = Field(description="Tool type.")
+    config: NativeToolConfig
+
+
 ToolDefinition = Annotated[
     HttpApiToolDefinition
     | EndCallToolDefinition
     | TransferCallToolDefinition
     | CalculatorToolDefinition
-    | McpToolDefinition,
+    | McpToolDefinition
+    | NativeToolDefinition,
     Field(discriminator="type"),
 ]
 

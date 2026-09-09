@@ -1,0 +1,192 @@
+---
+title: "AI inbound receptionist POC"
+description: "Run and inspect the three-model Asterisk and WFMS proof of concept"
+---
+
+This POC adds three separate inbound voice agents with one shared support policy:
+
+- `poc-openai` uses `gpt-realtime-2.1-mini`.
+- `poc-gemini-live` uses `gemini-3.1-flash-live-preview`.
+- `poc-google-cascade` uses Google STT, `gemini-3.8-flash`, and Hindi WaveNet TTS.
+
+The Asterisk IVR owns model selection. Dograh never swaps models within a call.
+
+## Prerequisites
+
+You need a working Dograh organization and user, an ARI telephony configuration,
+provider credentials for the model stacks you enable, and write access to the
+Asterisk recordings directory. Copy `.env.poc.example` values into the deployment
+`.env`; do not commit provider secrets.
+
+## Dashboard, seed, and deployment configuration
+
+Use a hybrid setup. Add OpenAI and Google credentials through the self-hosted
+Dograh **Models** dashboard. The seed does not contain API keys; it contains only
+the POC's provider/model selections, prompts, workflow graph, and references to
+the native tools. A self-hosted deployment has its own Postgres database, so
+credentials or agents from a Dograh cloud account do not automatically appear on
+the homelab.
+
+Run the seed once for each fresh database. It creates normal tool and workflow
+records in Postgres, which then appear in the dashboard and can be inspected or
+edited there. Rerunning the seed intentionally restores the canonical POC tool
+definitions, prompt, and model selections, so do not rerun it after dashboard
+customization unless you want those POC fields reconciled.
+
+The WFMS caller scoping, ownership checks, explicit confirmation gate, no-retry
+ticket creation, call limits, and Asterisk behavior remain versioned code or
+environment configuration. They are security/runtime controls and cannot be
+represented safely as a generic dashboard HTTP tool.
+
+## Seed the agents
+
+From the API container, run the idempotent seed command with the organization and
+user IDs from the self-hosted database:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.poc.yaml exec api \
+  python -m api.services.poc.seed --organization-id 1 --user-id 1
+```
+
+The output maps each engine key to its workflow ID. Put those three IDs in
+`deploy/poc-asterisk/extensions.conf`, then install the example Asterisk configs
+and record the prompts listed in `deploy/poc-asterisk/sounds/README.md`.
+
+The seed maintains business behavior in `CANONICAL_PROMPT` and creates six narrow
+WFMS tools plus transfer and end-call tools. Each workflow has a hard 300-second
+limit. Rerunning the seed updates the tools and publishes a new workflow version.
+
+## Start with mock WFMS
+
+Use `POC_WFMS_MODE=mock` until voice routing is verified. To opt into the discovered
+development API, set `POC_WFMS_MODE=live` and keep `WFMS_BASE_URL` set to the dev
+host. Safe GET operations retry once on transient failure. CreateTicket is sent
+only once and is never automatically retried.
+
+Unknown-caller creation is enabled by default after a successful live verification:
+
+```text
+POC_WFMS_UNKNOWN_CALLER_CREATE_ENABLED=true
+```
+
+On 2026-09-09, an explicitly authorized request for a confirmed unregistered phone
+number returned HTTP 200, `success=true`, and ticket `A0030`. Unknown callers map
+to `IssueType=External` and must provide their name, email address, and full address;
+`EmployeeId` is sent as an empty string. Set the flag to `false` to disable this
+path. A failed or timed-out CreateTicket result remains ambiguous and the assistant
+offers transfer instead of risking a duplicate.
+
+## Privacy and confirmation guarantees
+
+The adapter derives the WFMS mobile number from the inbound caller ID. Tool calls
+cannot supply another mobile number. Ticket details verify that `ContactNumber`
+belongs to the caller. Ticket summaries first verify details, then reject any
+summary row whose `TicketId` differs from the verified `RequestId`.
+
+Creation is a two-step operation. `prepare_support_ticket` stores a server-side
+draft and turn count. `create_support_ticket` accepts only its opaque token and
+requires a new explicit affirmative caller utterance. A model-generated boolean
+cannot bypass this check.
+
+The Employee to Internal and Client to External `IssueType` mapping is a POC
+assumption. The AI taxonomy is stored as call metadata and is not sent as invented
+WFMS category fields.
+
+## Daily caps and IVR behavior
+
+Each model route has an enable flag and daily limit. OpenAI defaults to 20 calls;
+the other routes default to disabled with limit zero. When a route is disabled or
+capped, Dograh returns the call to the dialplan and Asterisk plays the unavailable
+prompt. Option 4 bypasses AI and dials `PJSIP/anurag`.
+
+The IVR accepts one digit and permits exactly two attempts. `MixMonitor` starts
+immediately after answer without the bridge-only option, so the recording includes
+the IVR and the subsequent AI or human leg.
+
+Begin with the SIP-only `pjsip.conf.example`. Once that works, copy
+`chan_mobile.conf.example`, use Asterisk's `mobile search` command to discover the
+Android phone and RFCOMM port, and route the device to `poc-inbound`. Verify
+`mobile show devices` reports it connected before placing a real SIM call. If the
+packaged Asterisk lacks `chan_mobile`, back up `/etc/asterisk` before installing a
+build that enables the extended `chan_mobile` module and BlueZ development support.
+Do not replace a working Asterisk installation without a rollback package/config
+backup. If reasonable adapter/handset diagnostics fail, retain the working SIP POC
+and use the Vobiz trunk as the last-resort PSTN ingress.
+
+## Run the source build
+
+You do not need to start FastAPI and Next.js separately when using Docker. For a
+fresh checkout, first create Dograh's private `.env` without downloading a
+replacement compose file:
+
+```bash
+DOGRAH_SKIP_DOWNLOAD=1 ENABLE_COTURN=false ./scripts/setup_local.sh
+```
+
+Copy the non-secret settings you need from `.env.poc.example` into the generated
+`.env`, then start the full stack. The POC override builds the checked-out API and
+UI source, and its UI host port is configurable:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.poc.yaml up --build
+```
+
+The main compose file still requires the normal generated `.env`. On a server, set
+`POC_RECORDINGS_HOST_DIR=/srv/data/apps/ai-receptionist-poc/recordings` so the API
+can serve and delete the same recordings Asterisk creates.
+
+This homelab already uses port 8090 for Beszel, so `.env.poc.example` defaults the
+POC to `POC_UI_PORT=8091`. Open `http://100.112.215.55:8091` over Tailscale or
+`http://192.168.1.41:8091` on the LAN.
+
+The mount is intentionally writable because the requested inspector can delete a
+recording together with its POC run. For playback-only deployments, add `:ro` to
+the volume mount; deletion will then remove the database run but cannot remove the
+host WAV.
+
+Stop the source deployment with the same file set:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.poc.yaml down
+```
+
+For recovery, first switch `POC_WFMS_MODE=mock` or disable the affected engine,
+then restart the API. The base Dograh deployment remains available by starting only
+`docker-compose.yaml`; the POC override does not alter the base compose file.
+
+## Inspect evidence
+
+Open `/poc/calls` after signing in. The page is organization-scoped and shows the
+engine/model stack, language, masked caller, duration, outcome, ticket number,
+normalized and actual estimates, first-response latency, usage, logs, and the
+authenticated full-call recording. You can export all filtered rows to CSV or
+explicitly delete one, selected, or all POC runs and their POC-owned Asterisk
+recordings.
+
+Cost entries persist the pricing date and official source URLs. They are estimates:
+provider invoices remain authoritative. No new database table is used; evidence
+lives in the existing workflow-run JSON fields.
+
+## WFMS discovery notes
+
+Discovery on 2026-09-09 established the workbook's `/api/whatsapp/*` routes and
+the exact response envelopes for caller and ticket-list GETs and direct
+objects/arrays for details and summaries. A bogus
+ticket number unexpectedly returned ticket 19's summary, which is why the adapter
+performs the identity checks above. The authorized unknown-caller CreateTicket
+request returned ticket `A0030`; live success is accepted only when the response
+contains both `success=true` and a non-empty `ticketNumber`.
+
+## Pricing and upstream maintenance
+
+`api/services/poc/pricing.json` is the versioned pricing authority for a call.
+It records the verification date and official provider URLs; update it deliberately
+when prices change rather than scraping during a call. The actual estimate currently
+equals the normalized list-price estimate because invoice/free-tier reconciliation
+is unavailable, and that basis is stored with every calculation.
+
+To bring future Dograh changes into the POC branch, configure
+`https://github.com/dograh-hq/dograh.git` as the `upstream` remote, fetch it, and
+merge or rebase only from upstream `main`. Re-run the focused POC tests and the UI
+production build after resolving conflicts. Do not switch this branch to the stale
+upstream development branch.

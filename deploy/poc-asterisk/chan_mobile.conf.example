@@ -1,0 +1,16 @@
+[general]
+interval=30
+
+; Obtain this address from the host Bluetooth adapter, then replace it.
+[adapter]
+id=poc-blue
+address=REPLACE_WITH_BLUETOOTH_ADAPTER_MAC
+
+; Run `mobile search` in the Asterisk CLI to discover the phone MAC and RFCOMM port.
+[android-inbound]
+address=REPLACE_WITH_ANDROID_PHONE_MAC
+port=REPLACE_WITH_RFCOMM_PORT
+context=poc-inbound
+adapter=poc-blue
+group=1
+sms=no

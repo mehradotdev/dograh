@@ -1,0 +1,25 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      WFMS_BASE_URL: "${WFMS_BASE_URL:-https://wfms.htistelecom.in}"
+      POC_WFMS_MODE: "${POC_WFMS_MODE:-mock}"
+      POC_WFMS_UNKNOWN_CALLER_CREATE_ENABLED: "${POC_WFMS_UNKNOWN_CALLER_CREATE_ENABLED:-true}"
+      POC_OPENAI_ENABLED: "${POC_OPENAI_ENABLED:-true}"
+      POC_OPENAI_DAILY_LIMIT: "${POC_OPENAI_DAILY_LIMIT:-20}"
+      POC_GEMINI_ENABLED: "${POC_GEMINI_ENABLED:-false}"
+      POC_GEMINI_DAILY_LIMIT: "${POC_GEMINI_DAILY_LIMIT:-0}"
+      POC_GOOGLE_CASCADE_ENABLED: "${POC_GOOGLE_CASCADE_ENABLED:-false}"
+      POC_GOOGLE_CASCADE_DAILY_LIMIT: "${POC_GOOGLE_CASCADE_DAILY_LIMIT:-0}"
+      POC_ASTERISK_RECORDINGS_DIR: "/poc-recordings"
+      POC_ANURAG_SIP_DESTINATION: "${POC_ANURAG_SIP_DESTINATION:-PJSIP/anurag}"
+    volumes:
+      - "${POC_RECORDINGS_HOST_DIR:-./data/poc-recordings}:/poc-recordings"
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    ports: !override
+      - "${POC_UI_PORT:-8091}:3010"

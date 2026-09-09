@@ -1,4 +1,5 @@
 GOOGLE_MODELS = (
+    "gemini-3.8-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
 )
@@ -217,8 +218,8 @@ GOOGLE_STT_LANGUAGES = (
     "zu-ZA",
 )
 
-GOOGLE_TTS_MODELS = ("chirp_3_hd",)
-GOOGLE_TTS_VOICES = ("en-US-Chirp3-HD-Charon",)
+GOOGLE_TTS_MODELS = ("chirp_3_hd", "wavenet")
+GOOGLE_TTS_VOICES = ("en-US-Chirp3-HD-Charon", "hi-IN-Wavenet-A")
 GOOGLE_TTS_LANGUAGES = (
     "ar-XA",
     "bn-IN",

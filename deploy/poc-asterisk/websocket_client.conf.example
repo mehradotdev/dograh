@@ -1,0 +1,3 @@
+; Dograh uses the ARI event WebSocket exposed by Asterisk's HTTP server.
+; No outbound Asterisk WebSocket client is required. Keep port 8088 private and
+; expose it only to the Dograh host/network path.
