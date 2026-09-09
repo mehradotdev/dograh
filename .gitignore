@@ -28,6 +28,14 @@ coturn/
 dograh_pcm_cache/
 node_modules/
 
+# Homelab-local POC build/runtime artifacts. Reusable deployment sources belong
+# under deploy/poc-asterisk; these root paths contain generated binaries and
+# machine-specific overrides.
+/asterisk/
+/asterisk-build/
+/asterisk-poc.service
+/compose.homelab.yaml
+
 # Superpowers brainstorm mockups (local only)
 .superpowers/
 docs/superpowers/

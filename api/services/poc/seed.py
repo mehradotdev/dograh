@@ -227,9 +227,16 @@ async def seed(organization_id: int, user_id: int) -> dict[str, int]:
             workflow = await db_client.create_workflow(
                 name, definition, user_id, organization_id
             )
-        else:
-            workflow = await db_client.get_workflow(
-                workflow.id, organization_id=organization_id
+        # Both create_workflow and the listing query return detached ORM
+        # instances. Re-fetch with eager-loaded definitions before reading the
+        # relationship, otherwise a fresh database fails on the first seed.
+        workflow = await db_client.get_workflow(
+            workflow.id, organization_id=organization_id
+        )
+        if workflow is None:
+            raise RuntimeError(
+                f"Workflow {name!r} disappeared while seeding organization "
+                f"{organization_id}"
             )
         released = workflow.released_definition
         if (
