@@ -219,7 +219,9 @@ for a phone number. Briefly acknowledge only profile details useful to the call,
 ask how you can help. Stay here for up to three caller turns if needed to understand
 their intent. Move to Support triage once you know whether they want an existing
 ticket, a new ticket, general guidance, or a human. Do not create or discuss a ticket
-in detail in this opening stage.""",
+in detail in this opening stage. If caller identification is still unavailable after
+one safe retry, or the caller cannot be understood after two focused clarification
+attempts, route to Unable to complete.""",
                     "greeting_type": "text",
                     "greeting": greeting,
                     "allow_interrupt": True,
@@ -239,7 +241,9 @@ sentence. Answer simple general guidance when it is supported by the conversatio
 do not invent product facts. Route existing-ticket questions to Existing ticket help.
 Route a new incident or service request to Create a support ticket. If the caller asks
 for a person, or the request cannot be completed safely, obtain explicit permission and
-route to Human escalation. If the caller is finished, route to Close call.""",
+route to Human escalation. If the caller is finished, route to Successful completion.
+If the request cannot be handled safely and the caller declines or cannot use human
+escalation, route to Unable to complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                 },
@@ -256,7 +260,9 @@ three tickets first. Use get_ticket_details for exact fields and get_ticket_summ
 a concise explanation. Do not ask for another person's phone number. After answering,
 ask whether the caller needs help with anything else. Route another request back to
 Support triage, a new issue to Create a support ticket, an approved human request to
-Human escalation, or a completed conversation to Close call.""",
+Human escalation, or a completed conversation to Successful completion. If the required lookup
+still fails after one safe retry and the caller declines or cannot use human escalation,
+route to Unable to complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools(
@@ -277,7 +283,9 @@ prepare_support_ticket before creation. Read its concise summary back, then ask 
 yes or no confirmation question and wait. Call create_support_ticket only after an
 explicit yes in the immediately following caller turn. If the answer changes any field,
 prepare and confirm again. Never retry an ambiguous create result. After a confirmed
-success, state the returned ticket number and ask whether anything else is needed.""",
+success, state the returned ticket number and ask whether anything else is needed. If
+preparation or creation cannot safely complete and the caller declines or cannot use
+human escalation, route to Unable to complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools(
@@ -294,7 +302,7 @@ success, state the returned ticket number and ask whether anything else is neede
                     "prompt": """Enter this stage only after the caller explicitly agreed to a
 human transfer. Tell them briefly that you are connecting them with Anurag, then invoke
 the transfer tool as a separate tool-only turn. If it fails or is unavailable, apologize
-briefly, do not promise a callback, and route to Close call.""",
+briefly, do not promise a callback, and route to Unable to complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools("transfer_to_anurag"),
@@ -303,10 +311,21 @@ briefly, do not promise a callback, and route to Close call.""",
             {
                 "id": "close",
                 "type": "endCall",
-                "position": {"x": 300, "y": 1320},
+                "position": {"x": 120, "y": 1360},
                 "data": {
-                    "name": "Close call",
+                    "name": "Successful completion",
                     "prompt": "Thank the caller briefly and end the call. Use no more than twelve words, ask no new question, and make no new promise.",
+                    "add_global_prompt": False,
+                    "is_end": True,
+                },
+            },
+            {
+                "id": "failure",
+                "type": "endCall",
+                "position": {"x": 840, "y": 1360},
+                "data": {
+                    "name": "Unable to complete",
+                    "prompt": "Apologize briefly that the request could not be completed right now, suggest trying again later or using the normal support channel, and end politely. Do not mention internal errors, promise a callback, claim success, ask a new question, or use more than two short sentences.",
                     "add_global_prompt": False,
                     "is_end": True,
                 },
@@ -357,6 +376,17 @@ briefly, do not promise a callback, and route to Close call.""",
                 },
             },
             {
+                "id": "start-failure",
+                "type": "custom",
+                "animated": True,
+                "source": "start",
+                "target": "failure",
+                "data": {
+                    "label": "Cannot safely begin",
+                    "condition": "Caller identification is still unavailable after one safe retry, or essential speech remains unusable after two focused clarification attempts.",
+                },
+            },
+            {
                 "id": "triage-existing",
                 "type": "custom",
                 "animated": True,
@@ -398,6 +428,17 @@ briefly, do not promise a callback, and route to Close call.""",
                 "data": {
                     "label": "No further help",
                     "condition": "The caller confirms they need nothing else.",
+                },
+            },
+            {
+                "id": "triage-failure",
+                "type": "custom",
+                "animated": True,
+                "source": "triage",
+                "target": "failure",
+                "data": {
+                    "label": "Cannot safely assist",
+                    "condition": "The request is unsupported or cannot be completed safely, and the caller declines or cannot use human escalation.",
                 },
             },
             {
@@ -445,6 +486,17 @@ briefly, do not promise a callback, and route to Close call.""",
                 },
             },
             {
+                "id": "existing-failure",
+                "type": "custom",
+                "animated": True,
+                "source": "existing-ticket",
+                "target": "failure",
+                "data": {
+                    "label": "Ticket lookup unavailable",
+                    "condition": "The required ticket lookup still fails after one safe retry, and the caller declines or cannot use human escalation.",
+                },
+            },
+            {
                 "id": "new-triage",
                 "type": "custom",
                 "animated": True,
@@ -478,14 +530,25 @@ briefly, do not promise a callback, and route to Close call.""",
                 },
             },
             {
-                "id": "human-close",
+                "id": "new-failure",
+                "type": "custom",
+                "animated": True,
+                "source": "new-ticket",
+                "target": "failure",
+                "data": {
+                    "label": "Creation not completed",
+                    "condition": "Ticket preparation or creation failed or returned an ambiguous result, and the caller declines or cannot use human escalation.",
+                },
+            },
+            {
+                "id": "human-failure",
                 "type": "custom",
                 "animated": True,
                 "source": "human",
-                "target": "close",
+                "target": "failure",
                 "data": {
-                    "label": "Transfer finished",
-                    "condition": "The transfer attempt failed or returned control to the AI and the call should now close.",
+                    "label": "Transfer unsuccessful",
+                    "condition": "The transfer failed, was unavailable, or returned control to the AI without connecting the caller.",
                 },
             },
         ],

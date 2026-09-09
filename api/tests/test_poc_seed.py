@@ -82,6 +82,7 @@ def test_workflow_json_has_staged_support_flow_and_scoped_tools():
         "new-ticket",
         "human",
         "close",
+        "failure",
         "global",
     }
     assert nodes["start"]["data"]["tool_uuids"] == ["tool-get-caller"]
@@ -95,6 +96,11 @@ def test_workflow_json_has_staged_support_flow_and_scoped_tools():
         "tool-create-ticket",
     ]
     assert nodes["human"]["data"]["tool_uuids"] == ["tool-transfer"]
+    assert nodes["close"]["data"]["name"] == "Successful completion"
+    assert nodes["failure"]["data"]["name"] == "Unable to complete"
     assert all(edge["type"] == "custom" for edge in workflow["edges"])
     assert all(edge["data"]["condition"] for edge in workflow["edges"])
-    assert len(workflow["edges"]) == 15
+    assert {
+        edge["source"] for edge in workflow["edges"] if edge["target"] == "failure"
+    } == {"start", "triage", "existing-ticket", "new-ticket", "human"}
+    assert len(workflow["edges"]) == 19
