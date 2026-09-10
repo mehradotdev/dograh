@@ -59,3 +59,47 @@ async def test_create_requires_new_user_turn(monkeypatch):
     assert created["ticketNumber"] == "MOCK-1"
     assert engine._gathered_context["subcategory"] == "WFMS Login / Portal"
     await session.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_new_finalized_realtime_transcription():
+    engine = SimpleNamespace(
+        _call_context_vars={"caller_number": "9876543210"},
+        _gathered_context={},
+        context=SimpleNamespace(messages=[]),
+        transcription_revision=1,
+        latest_transcription="I cannot log in",
+    )
+    engine.user_transcription_snapshot = lambda: (
+        engine.transcription_revision,
+        engine.latest_transcription,
+    )
+    session = PocToolSession(engine)
+    session.client.get_caller = AsyncMock(return_value=None)
+    prepared = await session.execute(
+        "prepare_support_ticket",
+        {
+            "query_title": "WFMS login failure",
+            "description": "Usual password rejected",
+            "issue_type": "External",
+            "caller_type": "Unknown",
+            "category": "Fallback",
+            "subcategory": "Other",
+        },
+    )
+
+    engine.transcription_revision += 1
+    engine.latest_transcription = "Yes, create the ticket"
+    session.client.create_ticket = AsyncMock(
+        return_value=SimpleNamespace(
+            ticket_number="MOCK-2",
+            model_dump=lambda **_: {"success": True, "ticketNumber": "MOCK-2"},
+        )
+    )
+
+    created = await session.execute(
+        "create_support_ticket", {"confirmation_token": prepared["confirmation_token"]}
+    )
+
+    assert created["ticketNumber"] == "MOCK-2"
+    await session.client.aclose()

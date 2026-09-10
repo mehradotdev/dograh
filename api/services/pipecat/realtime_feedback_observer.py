@@ -92,16 +92,20 @@ class RealtimeFeedbackObserver(BaseObserver):
         self,
         ws_sender: Callable[[dict], Awaitable[None]],
         logs_buffer: Optional["InMemoryLogsBuffer"] = None,
+        final_user_transcription_callback: Callable[[str], None] | None = None,
     ):
         """
         Args:
             ws_sender: Async function to send messages over WebSocket.
                        Expected signature: async def send(message: dict) -> None
             logs_buffer: Optional InMemoryLogsBuffer to persist events for post-call analysis.
+            final_user_transcription_callback: Receives each finalized caller
+                transcript.
         """
         super().__init__()
         self._ws_sender = ws_sender
         self._logs_buffer = logs_buffer
+        self._final_user_transcription_callback = final_user_transcription_callback
         self._frames_seen: set[int] = set()
 
     async def on_push_frame(self, data: FramePushed):
@@ -172,6 +176,8 @@ class RealtimeFeedbackObserver(BaseObserver):
         # Handle user transcriptions (final) - WebSocket only
         # Complete turn text is persisted via register_turn_handlers
         elif isinstance(frame, TranscriptionFrame):
+            if self._final_user_transcription_callback:
+                self._final_user_transcription_callback(frame.text)
             await self._send_ws(
                 build_user_transcription_event(
                     text=frame.text,

@@ -156,6 +156,8 @@ class PipecatEngine:
         self._call_disposed = False
         self._current_node: Optional[Node] = None
         self._gathered_context: dict = {}
+        self._latest_user_transcription = ""
+        self._user_transcription_revision = 0
         self._user_response_timeout_task: Optional[asyncio.Task] = None
         self._pending_extraction_tasks: set[asyncio.Task] = set()
         # True once terminal call disposal has run its synchronous extraction.
@@ -1231,6 +1233,17 @@ class PipecatEngine:
     def create_aggregation_correction_callback(self) -> Callable[[str], str]:
         """Create a callback that corrects corrupted aggregation using reference text."""
         return engine_callbacks.create_aggregation_correction_callback(self)
+
+    def record_user_transcription(self, text: str) -> None:
+        """Record one finalized caller transcript for turn-sensitive tools."""
+        normalized = text.strip()
+        if normalized:
+            self._latest_user_transcription = normalized
+            self._user_transcription_revision += 1
+
+    def user_transcription_snapshot(self) -> tuple[int, str]:
+        """Return a monotonic revision and the latest finalized caller transcript."""
+        return self._user_transcription_revision, self._latest_user_transcription
 
     def set_context(self, context: LLMContext) -> None:
         """Set the LLM context.

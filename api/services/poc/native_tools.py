@@ -105,11 +105,20 @@ def _user_messages(engine: Any) -> list[Any]:
     ]
 
 
+def _transcription_snapshot(engine: Any) -> tuple[int, str]:
+    snapshot = getattr(engine, "user_transcription_snapshot", None)
+    if not callable(snapshot):
+        return 0, ""
+    revision, text = snapshot()
+    return int(revision), str(text or "")
+
+
 @dataclass
 class PendingTicket:
     token: str
     draft: TicketDraft
     user_turn_count: int
+    transcription_revision: int
 
 
 class PocToolSession:
@@ -156,8 +165,12 @@ class PocToolSession:
             elif function == "prepare_support_ticket":
                 draft = TicketDraft.model_validate(arguments)
                 token = secrets.token_urlsafe(18)
+                transcription_revision, _ = _transcription_snapshot(self.engine)
                 self.pending = PendingTicket(
-                    token, draft, len(_user_messages(self.engine))
+                    token,
+                    draft,
+                    len(_user_messages(self.engine)),
+                    transcription_revision,
                 )
                 result = {
                     "confirmation_token": token,
@@ -185,8 +198,20 @@ class PocToolSession:
         if not pending or not secrets.compare_digest(token, pending.token):
             raise ValueError("No matching prepared ticket; prepare the draft again")
         turns = _user_messages(self.engine)
-        if len(turns) <= pending.user_turn_count or not is_explicit_confirmation(
-            _message_text(turns[-1])
+        confirmation_text = ""
+        has_fresh_confirmation = len(turns) > pending.user_turn_count
+        if has_fresh_confirmation:
+            confirmation_text = _message_text(turns[-1])
+
+        transcription_revision, transcription_text = _transcription_snapshot(
+            self.engine
+        )
+        if transcription_revision > pending.transcription_revision:
+            has_fresh_confirmation = True
+            confirmation_text = transcription_text
+
+        if not has_fresh_confirmation or not is_explicit_confirmation(
+            confirmation_text
         ):
             raise ValueError(
                 "The caller has not explicitly confirmed this prepared ticket"

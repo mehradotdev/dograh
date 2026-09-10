@@ -45,11 +45,15 @@ def _frame_pushed(frame, direction, *, source=None):
 @pytest.mark.asyncio
 async def test_observer_streams_upstream_only_transcription_frames():
     messages = []
+    finalized_transcriptions = []
 
     async def ws_sender(message):
         messages.append(message)
 
-    observer = RealtimeFeedbackObserver(ws_sender=ws_sender)
+    observer = RealtimeFeedbackObserver(
+        ws_sender=ws_sender,
+        final_user_transcription_callback=finalized_transcriptions.append,
+    )
     frame = TranscriptionFrame(
         "Hi there",
         user_id="user-1",
@@ -69,6 +73,7 @@ async def test_observer_streams_upstream_only_transcription_frames():
             },
         }
     ]
+    assert finalized_transcriptions == ["Hi there"]
 
 
 @pytest.mark.asyncio

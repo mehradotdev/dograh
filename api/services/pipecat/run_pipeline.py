@@ -1125,6 +1125,7 @@ async def _run_pipeline_impl(
     feedback_observer = RealtimeFeedbackObserver(
         ws_sender=ws_sender,
         logs_buffer=in_memory_logs_buffer,
+        final_user_transcription_callback=engine.record_user_transcription,
     )
     task.add_observer(feedback_observer)
 
