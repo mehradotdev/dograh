@@ -324,6 +324,13 @@ class PipecatEngine:
             # changes through the pipeline, with tools first, so a provider that
             # reconnects for the new system instruction builds the replacement
             # session from the new node's tool schema.
+            #
+            # Also update the shared context synchronously. A transition
+            # function's result callback can emit an LLMContextFrame before the
+            # pipeline task drains these queued frames. Without this assignment,
+            # a rapid second transition can reconnect Gemini with the previous
+            # node's tools and make it narrate would-be function calls as text.
+            self.context.set_tools(tools_schema)
             await self.task.queue_frames(
                 [
                     LLMSetToolsFrame(tools=tools_schema),

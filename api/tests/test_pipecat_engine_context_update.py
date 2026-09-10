@@ -29,6 +29,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.tests.mock_transport import MockTransport
 from pipecat.transports.base_transport import TransportParams
+from pipecat.utils.types import is_given
 
 from api.services.workflow.pipecat_engine import PipecatEngine
 from api.services.workflow.workflow_graph import WorkflowGraph
@@ -90,6 +91,10 @@ async def test_node_context_queues_tools_before_realtime_reconnect():
     assert frames[1].delta.system_instruction == "Existing ticket help"
     assert frames[1].service is llm
     assert llm._context is context
+    assert [tool.name for tool in context.tools.standard_tools] == [
+        "get_my_tickets",
+        "poc_end_call",
+    ]
     llm._update_settings.assert_not_awaited()
 
 
@@ -113,6 +118,7 @@ async def test_node_context_queues_empty_tool_set_to_clear_previous_node_tools()
     frames = task.queue_frames.await_args.args[0]
     assert isinstance(frames[0], LLMSetToolsFrame)
     assert frames[0].tools.standard_tools == []
+    assert not is_given(context.tools)
 
 
 async def run_pipeline_and_capture_context(
