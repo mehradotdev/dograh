@@ -49,7 +49,7 @@ def test_runtime_rejects_silent_model_substitution():
             "openai_realtime",
             {
                 "realtime_provider": "openai_realtime",
-                "realtime_model": "gpt-realtime-2",
+                "realtime_model": "gpt-realtime-2.1-mini",
             },
         )
 
@@ -59,9 +59,28 @@ def test_runtime_accepts_exact_stack():
         "openai_realtime",
         {
             "realtime_provider": "openai_realtime",
-            "realtime_model": "gpt-realtime-2.1-mini",
+            "realtime_model": "gpt-realtime-2.1",
         },
     )
+
+
+def test_full_openai_realtime_model_has_cost_rates():
+    result = calculate_poc_cost(
+        "openai_realtime",
+        {
+            "llm": {
+                "OpenAI Realtime|||gpt-realtime-2.1": {
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                    "input_audio_tokens": 600,
+                    "output_audio_tokens": 300,
+                }
+            }
+        },
+    )
+
+    assert result["estimated_total"] > 0
+    assert len(result["components"]) == 4
 
 
 def test_default_engine_caps_are_conservative(monkeypatch):

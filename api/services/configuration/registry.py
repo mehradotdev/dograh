@@ -667,7 +667,11 @@ class SarvamLLMConfiguration(BaseLLMConfiguration):
     )
 
 
-OPENAI_REALTIME_MODELS = ["gpt-realtime-2", "gpt-realtime-2.1-mini"]
+OPENAI_REALTIME_MODELS = [
+    "gpt-realtime-2.1",
+    "gpt-realtime-2.1-mini",
+    "gpt-realtime-2",
+]
 # ISO 639-1 codes accepted by the Realtime API's input_audio_transcription.
 # Not exhaustive — the field allows custom input.
 OPENAI_REALTIME_LANGUAGES = [

@@ -22,6 +22,11 @@ async def test_seed_refetches_new_workflows_before_reading_definitions(monkeypat
     }
     monkeypatch.setattr(poc_seed, "_sync_tools", AsyncMock(return_value=tool_uuids))
     monkeypatch.setattr(
+        poc_seed,
+        "_sync_goodbye_recordings",
+        AsyncMock(return_value=(None, None)),
+    )
+    monkeypatch.setattr(
         poc_seed.db_client,
         "get_all_workflows_for_listing",
         AsyncMock(return_value=[]),
@@ -115,10 +120,64 @@ def test_workflow_json_has_staged_support_flow_and_scoped_tools():
     assert len(workflow["edges"]) == 19
 
 
+def test_workflow_json_uses_recorded_audio_before_end_nodes():
+    tool_uuids = {
+        "get_caller": "tool-get-caller",
+        "get_my_tickets": "tool-get-my-tickets",
+        "get_ticket_details": "tool-get-ticket-details",
+        "get_ticket_summary": "tool-get-ticket-summary",
+        "prepare_support_ticket": "tool-prepare-ticket",
+        "create_support_ticket": "tool-create-ticket",
+        "transfer_to_anurag": "tool-transfer",
+        "end_call": "tool-end-call",
+    }
+
+    workflow = poc_seed._workflow_json(
+        tool_uuids,
+        "Hello.",
+        success_goodbye_recording_pk=201,
+        failure_goodbye_recording_pk=301,
+    )
+
+    for edge in workflow["edges"]:
+        if edge["target"] == "close":
+            assert edge["data"]["transition_speech_type"] == "audio"
+            assert edge["data"]["transition_speech_recording_id"] == "201"
+        elif edge["target"] == "failure":
+            assert edge["data"]["transition_speech_type"] == "audio"
+            assert edge["data"]["transition_speech_recording_id"] == "301"
+
+
 def test_openai_poc_uses_automatic_transcription_language_detection():
     realtime = poc_seed.STACKS["poc-openai"]["model_overrides"]["realtime"]
 
     assert realtime["language"] is None
+
+
+def test_openai_poc_uses_full_realtime_model():
+    realtime = poc_seed.STACKS["poc-openai"]["model_overrides"]["realtime"]
+
+    assert realtime["model"] == "gpt-realtime-2.1"
+
+
+def test_unregistered_caller_is_a_successful_identity_lookup():
+    tool_uuids = {
+        "get_caller": "tool-get-caller",
+        "get_my_tickets": "tool-get-my-tickets",
+        "get_ticket_details": "tool-get-ticket-details",
+        "get_ticket_summary": "tool-get-ticket-summary",
+        "prepare_support_ticket": "tool-prepare-ticket",
+        "create_support_ticket": "tool-create-ticket",
+        "transfer_to_anurag": "tool-transfer",
+        "end_call": "tool-end-call",
+    }
+
+    workflow = poc_seed._workflow_json(tool_uuids, "Hello.")
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+    failure_edge = next(edge for edge in workflow["edges"] if edge["id"] == "start-failure")
+
+    assert "registered=false is a successful lookup" in nodes["start"]["data"]["prompt"]
+    assert "registered=false result is not a failure" in failure_edge["data"]["condition"]
 
 
 @pytest.mark.asyncio
@@ -144,7 +203,11 @@ async def test_sync_tools_repairs_end_call_description(monkeypatch):
     )
     monkeypatch.setattr(poc_seed.db_client, "update_tool", update_tool)
 
-    await poc_seed._sync_tools(organization_id=11, user_id=22)
+    await poc_seed._sync_tools(
+        organization_id=11,
+        user_id=22,
+        success_goodbye_recording_pk=201,
+    )
 
     end_call_update = next(
         call
@@ -153,3 +216,62 @@ async def test_sync_tools_repairs_end_call_description(monkeypatch):
     )
     assert "hang up" in end_call_update.kwargs["description"]
     assert "invoke this tool" in end_call_update.kwargs["description"]
+    assert end_call_update.kwargs["definition"]["config"] == {
+        "messageType": "audio",
+        "audioRecordingId": 201,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sync_goodbye_recording_reuses_existing_recording(monkeypatch):
+    existing = SimpleNamespace(id=201, storage_key="recordings/11/existing.wav")
+    monkeypatch.setattr(
+        poc_seed.db_client,
+        "get_recording_by_recording_id",
+        AsyncMock(return_value=existing),
+    )
+    upload = AsyncMock()
+    monkeypatch.setattr(poc_seed.storage_fs, "acreate_file_from_bytes", upload)
+
+    result = await poc_seed._sync_goodbye_recording(
+        11,
+        22,
+        recording_id=poc_seed.SUCCESS_GOODBYE_RECORDING_ID,
+        transcript=poc_seed.SUCCESS_GOODBYE_TRANSCRIPT,
+        audio_path=None,
+    )
+
+    assert result == 201
+    upload.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_goodbye_recording_uploads_and_creates_record(monkeypatch, tmp_path):
+    audio_path = tmp_path / "goodbye.wav"
+    audio_path.write_bytes(b"RIFF-test-audio")
+    monkeypatch.setattr(
+        poc_seed.db_client,
+        "get_recording_by_recording_id",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        poc_seed.storage_fs,
+        "acreate_file_from_bytes",
+        AsyncMock(return_value=True),
+    )
+    create_recording = AsyncMock(return_value=SimpleNamespace(id=301))
+    monkeypatch.setattr(poc_seed.db_client, "create_recording", create_recording)
+
+    result = await poc_seed._sync_goodbye_recording(
+        11,
+        22,
+        recording_id=poc_seed.FAILURE_GOODBYE_RECORDING_ID,
+        transcript=poc_seed.FAILURE_GOODBYE_TRANSCRIPT,
+        audio_path=str(audio_path),
+    )
+
+    assert result == 301
+    create_recording.assert_awaited_once()
+    assert create_recording.await_args.kwargs["storage_key"] == (
+        "recordings/11/poc-failure-goodbye/goodbye.wav"
+    )

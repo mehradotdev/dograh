@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 EXPECTED_STACKS = {
-    "openai_realtime": {"realtime": ("openai_realtime", "gpt-realtime-2.1-mini")},
+    "openai_realtime": {"realtime": ("openai_realtime", "gpt-realtime-2.1")},
     "gemini_live": {"realtime": ("google_realtime", "gemini-3.1-flash-live-preview")},
     "google_cascade": {
         "stt": ("google", "latest_short"),

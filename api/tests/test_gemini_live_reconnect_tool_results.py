@@ -332,7 +332,25 @@ async def test_node_transition_uses_fresh_connection_instead_of_stale_handle():
     assert service._session_resumption_handle is None
     assert service._awaiting_node_transition_context is True
     service._disconnect.assert_awaited_once_with(preserve_pending_end_frame=True)
+    service._connect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_node_transition_connects_only_after_updated_context_arrives():
+    service = _make_service()
+    service._handled_initial_context = True
+    service._awaiting_node_transition_context = True
+    service._node_transition_context_received = False
+    service._connect = AsyncMock()
+    service._maybe_seed_node_transition_context = AsyncMock()
+
+    context = _make_tool_result_context("call-transition")
+    await service._handle_context(context)
+
+    assert service._context is context
+    assert service._node_transition_context_received is True
     service._connect.assert_awaited_once_with(session_resumption_handle=None)
+    service._maybe_seed_node_transition_context.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

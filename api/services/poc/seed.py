@@ -10,9 +10,11 @@ import argparse
 import asyncio
 import json
 import os
+from pathlib import Path
 
 from api.db import db_client
-from api.enums import ToolCategory
+from api.enums import StorageBackend, ToolCategory
+from api.services.storage import storage_fs
 from api.services.workflow.dto import ReactFlowDTO
 
 CANONICAL_PROMPT = """# ROLE
@@ -76,7 +78,7 @@ STACKS = {
             "is_realtime": True,
             "realtime": {
                 "provider": "openai_realtime",
-                "model": "gpt-realtime-2.1-mini",
+                "model": "gpt-realtime-2.1",
                 # Mixed English, Hindi, and Hinglish calls need per-utterance
                 # transcription detection. Pinning this to Hindi turns English
                 # telephony phrases into misleading Devanagari phonetics.
@@ -127,8 +129,87 @@ NATIVE_FUNCTIONS = (
     "create_support_ticket",
 )
 
+SUCCESS_GOODBYE_RECORDING_ID = "poc-success-goodbye"
+FAILURE_GOODBYE_RECORDING_ID = "poc-failure-goodbye"
+SUCCESS_GOODBYE_TRANSCRIPT = "Thank you for calling HTIS support. Goodbye."
+FAILURE_GOODBYE_TRANSCRIPT = (
+    "Sorry, we couldn't complete your request right now. "
+    "Please try again later. Goodbye."
+)
 
-async def _sync_tools(organization_id: int, user_id: int) -> dict[str, str]:
+
+async def _sync_goodbye_recording(
+    organization_id: int,
+    user_id: int,
+    *,
+    recording_id: str,
+    transcript: str,
+    audio_path: str | None,
+) -> int | None:
+    """Return a stable POC recording PK, uploading it when a path is supplied."""
+    existing = await db_client.get_recording_by_recording_id(
+        recording_id, organization_id
+    )
+    if audio_path is None:
+        return existing.id if existing else None
+
+    path = Path(audio_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"POC goodbye recording not found: {path}")
+
+    storage_key = (
+        existing.storage_key
+        if existing
+        else f"recordings/{organization_id}/{recording_id}/{path.name}"
+    )
+    if not await storage_fs.acreate_file_from_bytes(storage_key, path.read_bytes()):
+        raise RuntimeError(f"Failed to upload POC goodbye recording: {path}")
+
+    if existing:
+        return existing.id
+
+    recording = await db_client.create_recording(
+        recording_id=recording_id,
+        organization_id=organization_id,
+        transcript=transcript,
+        storage_key=storage_key,
+        storage_backend=StorageBackend.get_current_backend().value,
+        created_by=user_id,
+        metadata={"original_filename": path.name, "purpose": "poc-goodbye"},
+    )
+    return recording.id
+
+
+async def _sync_goodbye_recordings(
+    organization_id: int,
+    user_id: int,
+    *,
+    success_audio_path: str | None = None,
+    failure_audio_path: str | None = None,
+) -> tuple[int | None, int | None]:
+    """Ensure the two dashboard-visible POC goodbye recordings exist."""
+    success_pk = await _sync_goodbye_recording(
+        organization_id,
+        user_id,
+        recording_id=SUCCESS_GOODBYE_RECORDING_ID,
+        transcript=SUCCESS_GOODBYE_TRANSCRIPT,
+        audio_path=success_audio_path,
+    )
+    failure_pk = await _sync_goodbye_recording(
+        organization_id,
+        user_id,
+        recording_id=FAILURE_GOODBYE_RECORDING_ID,
+        transcript=FAILURE_GOODBYE_TRANSCRIPT,
+        audio_path=failure_audio_path,
+    )
+    return success_pk, failure_pk
+
+
+async def _sync_tools(
+    organization_id: int,
+    user_id: int,
+    success_goodbye_recording_pk: int | None = None,
+) -> dict[str, str]:
     existing = {
         tool.name: tool
         for tool in await db_client.get_tools_for_organization(organization_id)
@@ -187,8 +268,17 @@ async def _sync_tools(organization_id: int, user_id: int) -> dict[str, str]:
                 "schema_version": 1,
                 "type": "end_call",
                 "config": {
-                    "messageType": "custom",
-                    "customMessage": "Thank you for calling HTIS. Goodbye.",
+                    **(
+                        {
+                            "messageType": "audio",
+                            "audioRecordingId": success_goodbye_recording_pk,
+                        }
+                        if success_goodbye_recording_pk is not None
+                        else {
+                            "messageType": "custom",
+                            "customMessage": SUCCESS_GOODBYE_TRANSCRIPT,
+                        }
+                    ),
                 },
             },
         ),
@@ -217,7 +307,13 @@ async def _sync_tools(organization_id: int, user_id: int) -> dict[str, str]:
     return uuids
 
 
-def _workflow_json(tool_uuids: dict[str, str], greeting: str) -> dict:
+def _workflow_json(
+    tool_uuids: dict[str, str],
+    greeting: str,
+    *,
+    success_goodbye_recording_pk: int | None = None,
+    failure_goodbye_recording_pk: int | None = None,
+) -> dict:
     def tools(*names: str) -> list[str]:
         return [tool_uuids[name] for name in names]
 
@@ -231,12 +327,15 @@ def _workflow_json(tool_uuids: dict[str, str], greeting: str) -> dict:
                     "name": "Welcome and identify caller",
                     "prompt": """The spoken greeting has already welcomed the caller.
 Immediately call get_caller once to identify the incoming number. Do not ask the caller
-for a phone number. Briefly acknowledge only profile details useful to the call, then
-ask how you can help. Stay here for up to three caller turns if needed to understand
-their intent. As soon as identity and intent are known, immediately invoke the
-transition labeled Caller and intent understood before saying anything else. Do not
-answer the support request, prepare a ticket, or claim a required tool is unavailable
-while still in this opening stage. If caller identification is still unavailable after
+for a phone number. A get_caller result with registered=false is a successful lookup of
+an unregistered caller, not an unavailable identity; continue normally and collect the
+required external-caller details only if they want to create a ticket. Briefly
+acknowledge only profile details useful to the call, then ask how you can help. Stay
+here for up to three caller turns if needed to understand their intent. As soon as
+identity and intent are known, immediately invoke the transition labeled Caller and
+intent understood before saying anything else. Do not answer the support request,
+prepare a ticket, or claim a required tool is unavailable while still in this opening
+stage. Retry get_caller only when the tool returns an error. If that error remains after
 one safe retry, or the caller cannot be understood after two focused clarification
 attempts, immediately invoke the transition to Unable to complete.""",
                     "greeting_type": "text",
@@ -406,7 +505,7 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 "target": "failure",
                 "data": {
                     "label": "Cannot safely begin",
-                    "condition": "Caller identification is still unavailable after one safe retry, or essential speech remains unusable after two focused clarification attempts.",
+                    "condition": "The get_caller tool still returns an error after one safe retry, or essential speech remains unusable after two focused clarification attempts. A successful registered=false result is not a failure.",
                 },
             },
             {
@@ -577,21 +676,55 @@ briefly, do not promise a callback, and route to Unable to complete.""",
         ],
         "viewport": {"x": 0, "y": 0, "zoom": 0.75},
     }
+    for edge in value["edges"]:
+        recording_pk = None
+        if edge["target"] == "close":
+            recording_pk = success_goodbye_recording_pk
+        elif edge["target"] == "failure":
+            recording_pk = failure_goodbye_recording_pk
+        if recording_pk is not None:
+            edge["data"].update(
+                {
+                    "transition_speech_type": "audio",
+                    "transition_speech_recording_id": str(recording_pk),
+                }
+            )
     # Validate the runtime contract, then keep React Flow presentation fields
     # such as custom edge type, animation, and viewport for the visual builder.
     ReactFlowDTO.model_validate(value)
     return value
 
 
-async def seed(organization_id: int, user_id: int) -> dict[str, int]:
-    tool_uuids = await _sync_tools(organization_id, user_id)
+async def seed(
+    organization_id: int,
+    user_id: int,
+    *,
+    success_goodbye_path: str | None = None,
+    failure_goodbye_path: str | None = None,
+) -> dict[str, int]:
+    success_goodbye_pk, failure_goodbye_pk = await _sync_goodbye_recordings(
+        organization_id,
+        user_id,
+        success_audio_path=success_goodbye_path,
+        failure_audio_path=failure_goodbye_path,
+    )
+    tool_uuids = await _sync_tools(
+        organization_id,
+        user_id,
+        success_goodbye_recording_pk=success_goodbye_pk,
+    )
     existing = {
         item.name: item
         for item in await db_client.get_all_workflows_for_listing(organization_id)
     }
     ids: dict[str, int] = {}
     for name, stack in STACKS.items():
-        definition = _workflow_json(tool_uuids, stack["greeting"])
+        definition = _workflow_json(
+            tool_uuids,
+            stack["greeting"],
+            success_goodbye_recording_pk=success_goodbye_pk,
+            failure_goodbye_recording_pk=failure_goodbye_pk,
+        )
         configurations = {
             "max_call_duration": 300,
             "max_user_idle_timeout": 30,
@@ -635,8 +768,22 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--organization-id", type=int, required=True)
     parser.add_argument("--user-id", type=int, required=True)
+    parser.add_argument("--success-goodbye-path")
+    parser.add_argument("--failure-goodbye-path")
     args = parser.parse_args()
-    print(json.dumps(asyncio.run(seed(args.organization_id, args.user_id)), indent=2))
+    print(
+        json.dumps(
+            asyncio.run(
+                seed(
+                    args.organization_id,
+                    args.user_id,
+                    success_goodbye_path=args.success_goodbye_path,
+                    failure_goodbye_path=args.failure_goodbye_path,
+                )
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

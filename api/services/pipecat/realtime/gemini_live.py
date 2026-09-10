@@ -255,15 +255,19 @@ class DograhGeminiLiveLLMService(GeminiLiveLLMService):
         self._node_transition_context_received = False
         self._node_transition_context_seed_started = False
         self._session_resumption_handle = None
-        should_open_new_session = await self._disconnect_for_reconnect()
-        if not should_open_new_session:
+        should_wait_for_new_context = await self._disconnect_for_reconnect()
+        if not should_wait_for_new_context:
             # The helper released a deferred EndFrame, so graceful shutdown now
             # owns the lifecycle and this node transition must not reconnect.
             self._awaiting_node_transition_context = False
             self._node_transition_context_received = False
             self._node_transition_context_seed_started = False
             return
-        await self._connect(session_resumption_handle=None)
+        # Do not connect here. The workflow engine has updated the node prompt
+        # and handlers, but the corresponding LLMContextFrame (including the
+        # new node's tool schema) is committed by the function-result callback
+        # immediately after set_node() returns. _handle_context opens the new
+        # session once that authoritative context arrives.
 
     # ------------------------------------------------------------------
     # Frame handling: mute, TTSSpeakFrame, BotStoppedSpeakingFrame flush
@@ -325,6 +329,14 @@ class DograhGeminiLiveLLMService(GeminiLiveLLMService):
         if self._awaiting_node_transition_context:
             self._context = context
             self._node_transition_context_received = True
+            # Build the replacement Live session only after the context frame
+            # for the new node arrives. Besides the function-call result, this
+            # frame carries the node's newly composed tool schema. Connecting
+            # earlier can advertise the previous node's tools, which makes
+            # Gemini narrate calls to new tools as text instead of emitting a
+            # real function call.
+            if not self._session and not self._connection_task:
+                await self._connect(session_resumption_handle=None)
             await self._maybe_seed_node_transition_context()
             return
         if not self._handled_initial_context:
