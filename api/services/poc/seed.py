@@ -21,7 +21,9 @@ caller check their own tickets, understand a ticket, create a new support ticket
 reach Anurag Mehra.
 
 # VOICE STYLE
-- Reply in the caller's English, Hindi, or Hinglish and follow language switches.
+- Default to English. Switch to Hindi or Hinglish only when the caller explicitly asks
+  or makes a substantive request in that language. Never infer language from accent,
+  filler words, names, or isolated borrowed words.
 - Sound warm and natural. Keep most turns to one or two short sentences.
 - Ask one focused question at a time. Do not read long lists or use markdown aloud.
 - If audio is unclear, ask casually for only the important detail to be repeated.
@@ -36,6 +38,10 @@ reach Anurag Mehra.
 
 # TOOL DISCIPLINE
 - When invoking a tool, output only the tool call. Do not mix speech and a tool call.
+- A caller request to hang up, end, stop, cut, disconnect, or terminate the call
+  overrides the current task. Immediately invoke the POC End Call tool, including for
+  equivalent Hindi or Hinglish requests such as "phone kaat do" or "call band karo".
+  Never merely say the call is ending without invoking the tool.
 - Never invent a profile, ticket, status, summary, or ticket number.
 - Read at most three tickets initially. Give more only when the caller asks.
 - Safe read failures may be retried once. Never blindly retry ticket creation after an
@@ -71,7 +77,10 @@ STACKS = {
             "realtime": {
                 "provider": "openai_realtime",
                 "model": "gpt-realtime-2.1-mini",
-                "language": "hi",
+                # Mixed English, Hindi, and Hinglish calls need per-utterance
+                # transcription detection. Pinning this to Hindi turns English
+                # telephony phrases into misleading Devanagari phonetics.
+                "language": None,
             },
         },
     },
@@ -154,6 +163,7 @@ async def _sync_tools(organization_id: int, user_id: int) -> dict[str, str]:
             "transfer_to_anurag",
             "POC Transfer to Anurag",
             ToolCategory.TRANSFER_CALL.value,
+            "Transfer the current live call to Anurag only after the caller explicitly agrees to the transfer.",
             {
                 "schema_version": 1,
                 "type": "transfer_call",
@@ -172,6 +182,7 @@ async def _sync_tools(organization_id: int, user_id: int) -> dict[str, str]:
             "end_call",
             "POC End Call",
             ToolCategory.END_CALL.value,
+            "Immediately disconnect the live call when the caller asks to hang up, end, stop, cut, disconnect, or terminate it, including equivalent Hindi or Hinglish phrases. Do not merely say the call is ending; invoke this tool.",
             {
                 "schema_version": 1,
                 "type": "end_call",
@@ -182,11 +193,15 @@ async def _sync_tools(organization_id: int, user_id: int) -> dict[str, str]:
             },
         ),
     ]
-    for key, name, category, definition in control_tools:
+    for key, name, category, description, definition in control_tools:
         tool = existing.get(name)
         if tool:
             tool = await db_client.update_tool(
-                tool.tool_uuid, organization_id, definition=definition, status="active"
+                tool.tool_uuid,
+                organization_id,
+                description=description,
+                definition=definition,
+                status="active",
             )
         else:
             tool = await db_client.create_tool(
@@ -195,6 +210,7 @@ async def _sync_tools(organization_id: int, user_id: int) -> dict[str, str]:
                 name,
                 definition,
                 category=category,
+                description=description,
                 icon="phone",
             )
         uuids[key] = tool.tool_uuid
@@ -217,17 +233,18 @@ def _workflow_json(tool_uuids: dict[str, str], greeting: str) -> dict:
 Immediately call get_caller once to identify the incoming number. Do not ask the caller
 for a phone number. Briefly acknowledge only profile details useful to the call, then
 ask how you can help. Stay here for up to three caller turns if needed to understand
-their intent. Move to Support triage once you know whether they want an existing
-ticket, a new ticket, general guidance, or a human. Do not create or discuss a ticket
-in detail in this opening stage. If caller identification is still unavailable after
+their intent. As soon as identity and intent are known, immediately invoke the
+transition labeled Caller and intent understood before saying anything else. Do not
+answer the support request, prepare a ticket, or claim a required tool is unavailable
+while still in this opening stage. If caller identification is still unavailable after
 one safe retry, or the caller cannot be understood after two focused clarification
-attempts, route to Unable to complete.""",
+attempts, immediately invoke the transition to Unable to complete.""",
                     "greeting_type": "text",
                     "greeting": greeting,
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "is_start": True,
-                    "tool_uuids": tools("get_caller"),
+                    "tool_uuids": tools("get_caller", "end_call"),
                 },
             },
             {
@@ -243,9 +260,12 @@ Route a new incident or service request to Create a support ticket. If the calle
 for a person, or the request cannot be completed safely, obtain explicit permission and
 route to Human escalation. If the caller is finished, route to Successful completion.
 If the request cannot be handled safely and the caller declines or cannot use human
-escalation, route to Unable to complete.""",
+escalation, route to Unable to complete. Once the goal matches a route, immediately
+invoke that transition before continuing; never claim a tool is unavailable when the
+next workflow stage provides it.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
+                    "tool_uuids": tools("end_call"),
                 },
             },
             {
@@ -266,7 +286,10 @@ route to Unable to complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools(
-                        "get_my_tickets", "get_ticket_details", "get_ticket_summary"
+                        "get_my_tickets",
+                        "get_ticket_details",
+                        "get_ticket_summary",
+                        "end_call",
                     ),
                 },
             },
@@ -289,7 +312,7 @@ human escalation, route to Unable to complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools(
-                        "prepare_support_ticket", "create_support_ticket"
+                        "prepare_support_ticket", "create_support_ticket", "end_call"
                     ),
                 },
             },
@@ -305,7 +328,7 @@ the transfer tool as a separate tool-only turn. If it fails or is unavailable, a
 briefly, do not promise a callback, and route to Unable to complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
-                    "tool_uuids": tools("transfer_to_anurag"),
+                    "tool_uuids": tools("transfer_to_anurag", "end_call"),
                 },
             },
             {

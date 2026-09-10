@@ -85,17 +85,26 @@ def test_workflow_json_has_staged_support_flow_and_scoped_tools():
         "failure",
         "global",
     }
-    assert nodes["start"]["data"]["tool_uuids"] == ["tool-get-caller"]
+    assert nodes["start"]["data"]["tool_uuids"] == [
+        "tool-get-caller",
+        "tool-end-call",
+    ]
+    assert nodes["triage"]["data"]["tool_uuids"] == ["tool-end-call"]
     assert nodes["existing-ticket"]["data"]["tool_uuids"] == [
         "tool-get-my-tickets",
         "tool-get-ticket-details",
         "tool-get-ticket-summary",
+        "tool-end-call",
     ]
     assert nodes["new-ticket"]["data"]["tool_uuids"] == [
         "tool-prepare-ticket",
         "tool-create-ticket",
+        "tool-end-call",
     ]
-    assert nodes["human"]["data"]["tool_uuids"] == ["tool-transfer"]
+    assert nodes["human"]["data"]["tool_uuids"] == [
+        "tool-transfer",
+        "tool-end-call",
+    ]
     assert nodes["close"]["data"]["name"] == "Successful completion"
     assert nodes["failure"]["data"]["name"] == "Unable to complete"
     assert all(edge["type"] == "custom" for edge in workflow["edges"])
@@ -104,3 +113,43 @@ def test_workflow_json_has_staged_support_flow_and_scoped_tools():
         edge["source"] for edge in workflow["edges"] if edge["target"] == "failure"
     } == {"start", "triage", "existing-ticket", "new-ticket", "human"}
     assert len(workflow["edges"]) == 19
+
+
+def test_openai_poc_uses_automatic_transcription_language_detection():
+    realtime = poc_seed.STACKS["poc-openai"]["model_overrides"]["realtime"]
+
+    assert realtime["language"] is None
+
+
+@pytest.mark.asyncio
+async def test_sync_tools_repairs_end_call_description(monkeypatch):
+    names = [
+        *(f"POC {function}" for function in poc_seed.NATIVE_FUNCTIONS),
+        "POC Transfer to Anurag",
+        "POC End Call",
+    ]
+    existing = [
+        SimpleNamespace(name=name, tool_uuid=f"tool-{index}")
+        for index, name in enumerate(names)
+    ]
+    update_tool = AsyncMock(
+        side_effect=lambda tool_uuid, organization_id, **kwargs: SimpleNamespace(
+            tool_uuid=tool_uuid
+        )
+    )
+    monkeypatch.setattr(
+        poc_seed.db_client,
+        "get_tools_for_organization",
+        AsyncMock(return_value=existing),
+    )
+    monkeypatch.setattr(poc_seed.db_client, "update_tool", update_tool)
+
+    await poc_seed._sync_tools(organization_id=11, user_id=22)
+
+    end_call_update = next(
+        call
+        for call in update_tool.await_args_list
+        if call.args[0] == existing[-1].tool_uuid
+    )
+    assert "hang up" in end_call_update.kwargs["description"]
+    assert "invoke this tool" in end_call_update.kwargs["description"]
