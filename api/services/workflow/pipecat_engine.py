@@ -19,6 +19,8 @@ from pipecat.frames.frames import (
     EndFrame,
     FunctionCallResultProperties,
     LLMContextFrame,
+    LLMSetToolsFrame,
+    LLMUpdateSettingsFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.worker import PipelineWorker
@@ -307,15 +309,35 @@ class PipecatEngine:
     async def _update_llm_context(self, system_prompt: str, functions: list[dict]):
         """Update LLM settings with the composed system prompt and tool list."""
 
-        if functions:
-            tools_schema = ToolsSchema(standard_tools=functions)
-            self.context.set_tools(tools_schema)
+        tools_schema = ToolsSchema(standard_tools=functions)
 
-        # For Gemini Live, set context on the LLM before _update_settings so that
-        # _connect (triggered by reconnect) can read tools from it.
-        if hasattr(self.llm, "_context") and not self.llm._context and self.context:
+        # Dograh defers the first Gemini Live connection until the initial node
+        # prompt is available. Give that service the shared context object up
+        # front so the ordered tool frame below is visible when it connects.
+        if hasattr(self.llm, "_context") and self.context:
             self.llm._context = self.context
 
+        if self.task is not None:
+            # Realtime providers keep a long-lived remote session. Mutating the
+            # context directly does not notify that session and can leave the
+            # next workflow node without any advertised tools. Queue both
+            # changes through the pipeline, with tools first, so a provider that
+            # reconnects for the new system instruction builds the replacement
+            # session from the new node's tool schema.
+            await self.task.queue_frames(
+                [
+                    LLMSetToolsFrame(tools=tools_schema),
+                    LLMUpdateSettingsFrame(
+                        delta=LLMSettings(system_instruction=system_prompt),
+                        service=self.llm,
+                    ),
+                ]
+            )
+            return
+
+        # Some isolated engine tests initialize without a running pipeline.
+        # Preserve that supported path while production updates stay ordered.
+        self.context.set_tools(tools_schema)
         await self.llm._update_settings(LLMSettings(system_instruction=system_prompt))
 
     def _format_prompt(self, prompt: str) -> str:
@@ -904,9 +926,10 @@ class PipecatEngine:
             and self.context is not None
         ):
             logger.debug("Queueing initial LLM generation for node opening")
-            # Queue after the voicemail detector in the live pipeline so the
-            # detector can gate initial generations when needed.
-            await self.llm.queue_frame(LLMContextFrame(self.context))
+            # Keep this trigger behind the node's queued tool and settings
+            # updates. Sending it straight to the LLM can overtake those
+            # frames, causing a response with the previous prompt/tool set.
+            await self.task.queue_frame(LLMContextFrame(self.context))
             return "llm"
 
         return "none"

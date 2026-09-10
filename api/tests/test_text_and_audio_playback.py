@@ -228,9 +228,9 @@ async def run_pipeline_and_capture_frames(
     queued_frames: list[Frame] = []
     original_queue_frame = task.queue_frame
 
-    async def capturing_queue_frame(frame):
+    async def capturing_queue_frame(frame, *args, **kwargs):
         queued_frames.append(frame)
-        await original_queue_frame(frame)
+        await original_queue_frame(frame, *args, **kwargs)
 
     task.queue_frame = capturing_queue_frame
 
@@ -529,8 +529,8 @@ class TestStartGreeting:
         )
 
         assert result == "llm"
-        task.queue_frame.assert_not_awaited()
-        queued_frame = llm.queue_frame.await_args.args[0]
+        llm.queue_frame.assert_not_awaited()
+        queued_frame = task.queue_frame.await_args.args[0]
         assert isinstance(queued_frame, LLMContextFrame)
         assert queued_frame.context is context
 

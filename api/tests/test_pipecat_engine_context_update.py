@@ -15,9 +15,11 @@ result in the context when generating the next response.
 
 import asyncio
 from typing import List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -41,6 +43,76 @@ from pipecat.tests import (
     MockLLMService,
     MockTTSService,
 )
+
+
+@pytest.mark.asyncio
+async def test_node_context_queues_tools_before_realtime_reconnect():
+    """A node change must advertise its tools before updating the live prompt."""
+    context = LLMContext()
+    llm = MagicMock()
+    llm._context = None
+    llm._update_settings = AsyncMock()
+    task = MagicMock()
+    task.queue_frames = AsyncMock()
+    engine = PipecatEngine(
+        task=task,
+        llm=llm,
+        context=context,
+        workflow=MagicMock(),
+        call_context_vars={},
+    )
+    functions = [
+        FunctionSchema(
+            name="get_my_tickets",
+            description="List tickets for the current caller.",
+            properties={},
+            required=[],
+        ),
+        FunctionSchema(
+            name="poc_end_call",
+            description="End the live call.",
+            properties={},
+            required=[],
+        ),
+    ]
+
+    await engine._update_llm_context("Existing ticket help", functions)
+
+    task.queue_frames.assert_awaited_once()
+    frames = task.queue_frames.await_args.args[0]
+    assert len(frames) == 2
+    assert isinstance(frames[0], LLMSetToolsFrame)
+    assert [tool.name for tool in frames[0].tools.standard_tools] == [
+        "get_my_tickets",
+        "poc_end_call",
+    ]
+    assert isinstance(frames[1], LLMUpdateSettingsFrame)
+    assert frames[1].delta.system_instruction == "Existing ticket help"
+    assert frames[1].service is llm
+    assert llm._context is context
+    llm._update_settings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_node_context_queues_empty_tool_set_to_clear_previous_node_tools():
+    context = LLMContext()
+    llm = MagicMock()
+    llm._context = context
+    task = MagicMock()
+    task.queue_frames = AsyncMock()
+    engine = PipecatEngine(
+        task=task,
+        llm=llm,
+        context=context,
+        workflow=MagicMock(),
+        call_context_vars={},
+    )
+
+    await engine._update_llm_context("End the call", [])
+
+    frames = task.queue_frames.await_args.args[0]
+    assert isinstance(frames[0], LLMSetToolsFrame)
+    assert frames[0].tools.standard_tools == []
 
 
 async def run_pipeline_and_capture_context(

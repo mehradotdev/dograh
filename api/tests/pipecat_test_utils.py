@@ -25,8 +25,9 @@ async def run_engine_test_pipeline(
 
     Production initializes the engine before starting the worker, then starts the
     conversation only after both the transport client and pipeline are ready. Tests
-    use a direct ``LLMContextFrame`` as their default stimulus because they are
-    exercising an LLM response rather than the configured node greeting.
+    use an ``LLMContextFrame`` as their default stimulus because they are exercising
+    an LLM response rather than the configured node greeting. It is queued through
+    the worker so it cannot overtake node settings and tool updates.
     """
     await engine.initialize()
 
@@ -42,7 +43,7 @@ async def run_engine_test_pipeline(
             return
 
         await engine.set_node(engine.workflow.start_node_id)
-        await engine.llm.queue_frame(LLMContextFrame(engine.context))
+        await task.queue_frame(LLMContextFrame(engine.context))
 
     async def maybe_trigger_test() -> None:
         if (
