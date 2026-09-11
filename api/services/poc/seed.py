@@ -40,6 +40,9 @@ reach Anurag Mehra.
 
 # TOOL DISCIPLINE
 - When invoking a tool, output only the tool call. Do not mix speech and a tool call.
+- After the caller explicitly consents to a human transfer, immediately invoke the
+  POC Transfer to Anurag tool as the next action. Do not move to another workflow
+  stage, announce an unstarted transfer, or wait for another caller utterance.
 - A caller request to hang up, end, stop, cut, disconnect, or terminate the call
   overrides the current task. Immediately invoke the POC End Call tool, including for
   equivalent Hindi or Hinglish requests such as "phone kaat do" or "call band karo".
@@ -336,15 +339,20 @@ here for up to three caller turns if needed to understand their intent. As soon 
 identity and intent are known, immediately invoke the transition labeled Caller and
 intent understood before saying anything else. Do not answer the support request,
 prepare a ticket, or claim a required tool is unavailable while still in this opening
-stage. Retry get_caller only when the tool returns an error. If that error remains after
-one safe retry, or the caller cannot be understood after two focused clarification
-attempts, immediately invoke the transition to Unable to complete.""",
+stage. If the caller asks for a person, ask for explicit transfer consent; after an
+explicit yes, immediately invoke the transfer tool before saying anything else and do
+not wait for another caller turn. Retry get_caller only when the tool returns an error.
+If that error remains after one safe retry, the transfer fails, or the caller cannot be
+understood after two focused clarification attempts, immediately invoke the transition
+to Unable to complete.""",
                     "greeting_type": "text",
                     "greeting": greeting,
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "is_start": True,
-                    "tool_uuids": tools("get_caller", "end_call"),
+                    "tool_uuids": tools(
+                        "get_caller", "transfer_to_anurag", "end_call"
+                    ),
                 },
             },
             {
@@ -357,15 +365,17 @@ attempts, immediately invoke the transition to Unable to complete.""",
 sentence. Answer simple general guidance when it is supported by the conversation, but
 do not invent product facts. Route existing-ticket questions to Existing ticket help.
 Route a new incident or service request to Create a support ticket. If the caller asks
-for a person, or the request cannot be completed safely, obtain explicit permission and
-route to Human escalation. If the caller is finished, route to Successful completion.
+for a person, or the request cannot be completed safely, obtain explicit permission.
+After an explicit yes, immediately invoke the transfer tool before saying anything else;
+do not transition to another stage or wait for another caller turn. If the caller is
+finished, route to Successful completion.
 If the request cannot be handled safely and the caller declines or cannot use human
 escalation, route to Unable to complete. Once the goal matches a route, immediately
 invoke that transition before continuing; never claim a tool is unavailable when the
 next workflow stage provides it.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
-                    "tool_uuids": tools("end_call"),
+                    "tool_uuids": tools("transfer_to_anurag", "end_call"),
                 },
             },
             {
@@ -379,17 +389,20 @@ Call get_my_tickets when a list or status overview is needed and present no more
 three tickets first. Use get_ticket_details for exact fields and get_ticket_summary for
 a concise explanation. Do not ask for another person's phone number. After answering,
 ask whether the caller needs help with anything else. Route another request back to
-Support triage, a new issue to Create a support ticket, an approved human request to
-Human escalation, or a completed conversation to Successful completion. If the required lookup
-still fails after one safe retry, explain the limitation and offer human escalation. If
-the caller declines escalation and clearly needs nothing else, route to Successful
-completion. Route to Unable to complete only while an unresolved request remains.""",
+Support triage or a new issue to Create a support ticket. For an approved human request,
+immediately invoke the transfer tool before saying anything else; do not transition to
+another stage or wait for another caller turn. Route a completed conversation to
+Successful completion. If the required lookup still fails after one safe retry, explain
+the limitation and offer human escalation. If the caller declines escalation and clearly
+needs nothing else, route to Successful completion. Route to Unable to complete only
+while an unresolved request remains or after a failed transfer.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools(
                         "get_my_tickets",
                         "get_ticket_details",
                         "get_ticket_summary",
+                        "transfer_to_anurag",
                         "end_call",
                     ),
                 },
@@ -408,28 +421,19 @@ yes or no confirmation question and wait. Call create_support_ticket only after 
 explicit yes in the immediately following caller turn. If the answer changes any field,
 prepare and confirm again. Never retry an ambiguous create result. After a confirmed
 success, state the returned ticket number and ask whether anything else is needed. If
-preparation or creation cannot safely complete and the caller declines or cannot use
-human escalation, route to Unable to complete.""",
+the caller requests a person, or preparation or creation cannot safely complete, offer
+human escalation. After explicit consent, immediately invoke the transfer tool before
+saying anything else; do not transition to another stage or wait for another caller
+turn. If the caller declines escalation or the transfer fails, route to Unable to
+complete.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools(
-                        "prepare_support_ticket", "create_support_ticket", "end_call"
+                        "prepare_support_ticket",
+                        "create_support_ticket",
+                        "transfer_to_anurag",
+                        "end_call",
                     ),
-                },
-            },
-            {
-                "id": "human",
-                "type": "agentNode",
-                "position": {"x": 1160, "y": 1030},
-                "data": {
-                    "name": "Human escalation",
-                    "prompt": """Enter this stage only after the caller explicitly agreed to a
-human transfer. Tell them briefly that you are connecting them with Anurag, then invoke
-the transfer tool as a separate tool-only turn. If it fails or is unavailable, apologize
-briefly, do not promise a callback, and route to Unable to complete.""",
-                    "allow_interrupt": True,
-                    "add_global_prompt": True,
-                    "tool_uuids": tools("transfer_to_anurag", "end_call"),
                 },
             },
             {
@@ -478,17 +482,6 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 },
             },
             {
-                "id": "start-human",
-                "type": "custom",
-                "animated": True,
-                "source": "start",
-                "target": "human",
-                "data": {
-                    "label": "Human requested",
-                    "condition": "The caller explicitly asks for a person and agrees to be transferred to Anurag.",
-                },
-            },
-            {
                 "id": "start-close",
                 "type": "custom",
                 "animated": True,
@@ -507,7 +500,7 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 "target": "failure",
                 "data": {
                     "label": "Cannot safely begin",
-                    "condition": "The get_caller tool still returns an error after one safe retry, or essential speech remains unusable after two focused clarification attempts. A successful registered=false result is not a failure.",
+                    "condition": "The get_caller tool still returns an error after one safe retry, a requested human transfer fails, or essential speech remains unusable after two focused clarification attempts. A successful registered=false result is not a failure.",
                 },
             },
             {
@@ -533,17 +526,6 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 },
             },
             {
-                "id": "triage-human",
-                "type": "custom",
-                "animated": True,
-                "source": "triage",
-                "target": "human",
-                "data": {
-                    "label": "Escalate to Anurag",
-                    "condition": "The caller explicitly agrees to a human transfer, or WFMS cannot complete the task and the caller accepts escalation.",
-                },
-            },
-            {
                 "id": "triage-close",
                 "type": "custom",
                 "animated": True,
@@ -562,7 +544,7 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 "target": "failure",
                 "data": {
                     "label": "Cannot safely assist",
-                    "condition": "The request is unsupported or cannot be completed safely, and the caller declines or cannot use human escalation.",
+                    "condition": "The request is unsupported or cannot be completed safely and the caller declines human escalation, or an approved transfer fails.",
                 },
             },
             {
@@ -588,17 +570,6 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 },
             },
             {
-                "id": "existing-human",
-                "type": "custom",
-                "animated": True,
-                "source": "existing-ticket",
-                "target": "human",
-                "data": {
-                    "label": "Human help",
-                    "condition": "The caller explicitly agrees to transfer to Anurag.",
-                },
-            },
-            {
                 "id": "existing-close",
                 "type": "custom",
                 "animated": True,
@@ -617,7 +588,7 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 "target": "failure",
                 "data": {
                     "label": "Ticket lookup unavailable",
-                    "condition": "The required ticket lookup still fails after one safe retry, and the caller declines or cannot use human escalation.",
+                    "condition": "The required ticket lookup still fails after one safe retry and the caller declines human escalation, or an approved transfer fails.",
                 },
             },
             {
@@ -629,17 +600,6 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 "data": {
                     "label": "Another request",
                     "condition": "Ticket creation is complete or abandoned and the caller has another support request.",
-                },
-            },
-            {
-                "id": "new-human",
-                "type": "custom",
-                "animated": True,
-                "source": "new-ticket",
-                "target": "human",
-                "data": {
-                    "label": "Creation needs human",
-                    "condition": "The caller explicitly agrees to transfer after ticket creation cannot safely complete or they request a person.",
                 },
             },
             {
@@ -661,18 +621,7 @@ briefly, do not promise a callback, and route to Unable to complete.""",
                 "target": "failure",
                 "data": {
                     "label": "Creation not completed",
-                    "condition": "Ticket preparation or creation failed or returned an ambiguous result, and the caller declines or cannot use human escalation.",
-                },
-            },
-            {
-                "id": "human-failure",
-                "type": "custom",
-                "animated": True,
-                "source": "human",
-                "target": "failure",
-                "data": {
-                    "label": "Transfer unsuccessful",
-                    "condition": "The transfer failed, was unavailable, or returned control to the AI without connecting the caller.",
+                    "condition": "Ticket preparation or creation failed or returned an ambiguous result and the caller declines human escalation, or an approved transfer fails.",
                 },
             },
         ],

@@ -93,28 +93,29 @@ def test_workflow_json_has_staged_support_flow_and_scoped_tools():
         "triage",
         "existing-ticket",
         "new-ticket",
-        "human",
         "close",
         "failure",
         "global",
     }
     assert nodes["start"]["data"]["tool_uuids"] == [
         "tool-get-caller",
+        "tool-transfer",
         "tool-end-call",
     ]
-    assert nodes["triage"]["data"]["tool_uuids"] == ["tool-end-call"]
+    assert nodes["triage"]["data"]["tool_uuids"] == [
+        "tool-transfer",
+        "tool-end-call",
+    ]
     assert nodes["existing-ticket"]["data"]["tool_uuids"] == [
         "tool-get-my-tickets",
         "tool-get-ticket-details",
         "tool-get-ticket-summary",
+        "tool-transfer",
         "tool-end-call",
     ]
     assert nodes["new-ticket"]["data"]["tool_uuids"] == [
         "tool-prepare-ticket",
         "tool-create-ticket",
-        "tool-end-call",
-    ]
-    assert nodes["human"]["data"]["tool_uuids"] == [
         "tool-transfer",
         "tool-end-call",
     ]
@@ -124,8 +125,13 @@ def test_workflow_json_has_staged_support_flow_and_scoped_tools():
     assert all(edge["data"]["condition"] for edge in workflow["edges"])
     assert {
         edge["source"] for edge in workflow["edges"] if edge["target"] == "failure"
-    } == {"start", "triage", "existing-ticket", "new-ticket", "human"}
-    assert len(workflow["edges"]) == 19
+    } == {"start", "triage", "existing-ticket", "new-ticket"}
+    assert not any(edge["target"] == "human" for edge in workflow["edges"])
+    assert len(workflow["edges"]) == 14
+
+    for node_id in ("start", "triage", "existing-ticket", "new-ticket"):
+        assert "tool-transfer" in nodes[node_id]["data"]["tool_uuids"]
+        assert "do not" in nodes[node_id]["data"]["prompt"].lower()
 
 
 def test_workflow_json_uses_recorded_audio_before_end_nodes():

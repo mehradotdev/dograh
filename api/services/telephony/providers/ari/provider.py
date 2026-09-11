@@ -506,6 +506,9 @@ class ARIProvider(TelephonyProvider):
                 "appArgs": app_args,
                 "timeout": timeout,  # Keep timeout for transfer calls
             }
+            caller_id = kwargs.get("caller_id")
+            if caller_id and caller_id != "unknown":
+                params["callerId"] = caller_id
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(

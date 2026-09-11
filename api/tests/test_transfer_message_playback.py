@@ -133,6 +133,7 @@ class RecordingEngine:
 
     async def end_call_with_reason(self, call_status, abort_immediately=False):
         self.events.append(("end_call", call_status))
+        self.events.append(("end_call_abort_immediately", abort_immediately))
 
     def set_mute_pipeline(self, value):
         return None
@@ -542,7 +543,7 @@ class TestTransferDispositionRace:
 
         workflow_run = SimpleNamespace(
             mode=WorkflowRunMode.TWILIO.value,
-            initial_context={},
+            initial_context={"caller_number": "+917065229082"},
             gathered_context={"call_id": "original-call-sid"},
         )
         provider = SimpleNamespace(
@@ -600,6 +601,10 @@ class TestTransferDispositionRace:
             await handler(params)
 
         assert ("disposition", "transferred_to_support") in engine.events
-        assert ("end_call", EndTaskReason.TRANSFER_CALL.value) in engine.events
+        assert (
+            "end_call_abort_immediately",
+            True,
+        ) in engine.events
+        assert provider.transfer_call.await_args.kwargs["caller_id"] == "+917065229082"
         assert resolve_config.await_args.kwargs["arguments"] == {}
         params.result_callback.assert_awaited_once()

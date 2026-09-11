@@ -25,5 +25,7 @@ password=REPLACE_WITH_LONG_RANDOM_PASSWORD
 
 [anurag]
 type=aor
-max_contacts=2
+max_contacts=1
 remove_existing=yes
+qualify_frequency=30
+qualify_timeout=3.0

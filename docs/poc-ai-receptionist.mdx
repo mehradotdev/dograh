@@ -54,7 +54,9 @@ and record the prompts listed in `deploy/poc-asterisk/sounds/README.md`.
 
 The seed maintains business behavior in `CANONICAL_PROMPT` and creates six narrow
 WFMS tools plus transfer and end-call tools. Each workflow has a hard 300-second
-limit. Rerunning the seed updates the tools and publishes a new workflow version.
+limit. Human transfer is attached directly to each active support node so an explicit
+caller confirmation can start the transfer without an intermediate workflow turn.
+Rerunning the seed updates the tools and publishes a new workflow version.
 
 ## Start with mock WFMS
 
