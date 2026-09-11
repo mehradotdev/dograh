@@ -1016,9 +1016,20 @@ def create_llm_service_from_provider(
         )
     elif provider == ServiceProviders.GOOGLE.value:
         model = _migrate_deprecated_google_model(model)
+        # Pipecat's model-aware default currently falls back to the
+        # ``minimal`` thinking level for unknown Gemini 3 Flash releases.
+        # Gemini 3.8 Flash rejects that level, so pin its lowest supported
+        # setting explicitly until the upstream compatibility map includes it.
+        thinking = None
+        if model.startswith("gemini-3.8-flash"):
+            thinking = GoogleLLMService.ThinkingConfig(thinking_level="low")
         return DograhGoogleLLMService(
             api_key=api_key,
-            settings=GoogleLLMSettings(model=model, temperature=0.1),
+            settings=GoogleLLMSettings(
+                model=model,
+                temperature=0.1,
+                thinking=thinking,
+            ),
         )
     elif provider == ServiceProviders.GOOGLE_VERTEX.value:
         return DograhGoogleVertexLLMService(

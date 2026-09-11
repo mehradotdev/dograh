@@ -109,6 +109,20 @@ def test_google_llm_service_factory_uses_dograh_service_class():
     assert mock_service.call_args.kwargs["settings"].model == "gemini-3.5-flash"
 
 
+def test_google_llm_service_factory_uses_supported_thinking_for_gemini_3_8():
+    with patch(
+        "api.services.pipecat.service_factory.DograhGoogleLLMService",
+    ) as mock_service:
+        create_llm_service_from_provider(
+            provider=ServiceProviders.GOOGLE.value,
+            model="gemini-3.8-flash",
+            api_key="test-api-key",
+        )
+
+    thinking = mock_service.call_args.kwargs["settings"].thinking
+    assert thinking.thinking_level == "low"
+
+
 def test_google_vertex_llm_service_factory_uses_dograh_service_class():
     with patch(
         "api.services.pipecat.service_factory.DograhGoogleVertexLLMService",
