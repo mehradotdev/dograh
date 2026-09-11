@@ -16,7 +16,7 @@ def test_google_cascade_cost_is_componentized():
                     "total_tokens": 1200,
                 }
             },
-            "stt": {"Google|||latest_short": 60.0},
+            "stt": {"Google|||chirp_3": 60.0},
             "tts": {"Google|||wavenet": 1000},
             "call_duration_seconds": 60,
         },
@@ -62,6 +62,37 @@ def test_runtime_accepts_exact_stack():
             "realtime_model": "gpt-realtime-2.1",
         },
     )
+
+
+def test_runtime_accepts_google_cascade_chirp_3_in_eu():
+    validate_poc_runtime(
+        "google_cascade",
+        {
+            "stt_provider": "google",
+            "stt_model": "chirp_3",
+            "stt_location": "eu",
+            "llm_provider": "google",
+            "llm_model": "gemini-3.8-flash",
+            "tts_provider": "google",
+            "tts_model": "wavenet",
+        },
+    )
+
+
+def test_runtime_rejects_google_cascade_global_location():
+    with pytest.raises(ValueError, match="requires stt_location=eu"):
+        validate_poc_runtime(
+            "google_cascade",
+            {
+                "stt_provider": "google",
+                "stt_model": "chirp_3",
+                "stt_location": "global",
+                "llm_provider": "google",
+                "llm_model": "gemini-3.8-flash",
+                "tts_provider": "google",
+                "tts_model": "wavenet",
+            },
+        )
 
 
 def test_full_openai_realtime_model_has_cost_rates():

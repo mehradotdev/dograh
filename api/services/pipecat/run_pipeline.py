@@ -698,6 +698,7 @@ async def _run_pipeline_impl(
             "stt_provider": user_config.stt.provider,
             "stt_model": user_config.stt.model,
             "stt_language": user_config.stt.language,
+            "stt_location": getattr(user_config.stt, "location", None) or "global",
             "tts_provider": user_config.tts.provider,
             "tts_model": user_config.tts.model,
             "tts_language": user_config.tts.language,

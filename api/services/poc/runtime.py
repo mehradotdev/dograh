@@ -6,10 +6,14 @@ EXPECTED_STACKS = {
     "openai_realtime": {"realtime": ("openai_realtime", "gpt-realtime-2.1")},
     "gemini_live": {"realtime": ("google_realtime", "gemini-3.1-flash-live-preview")},
     "google_cascade": {
-        "stt": ("google", "latest_short"),
+        "stt": ("google", "chirp_3"),
         "llm": ("google", "gemini-3.8-flash"),
         "tts": ("google", "wavenet"),
     },
+}
+
+EXPECTED_SETTINGS = {
+    "google_cascade": {"stt_location": "eu"},
 }
 
 
@@ -27,4 +31,10 @@ def validate_poc_runtime(engine: str | None, runtime: dict[str, Any]) -> None:
         if got != pair:
             raise ValueError(
                 f"POC {engine} requires {section}={pair[0]}/{pair[1]}; resolved {got[0]}/{got[1]}"
+            )
+    for field, expected_value in EXPECTED_SETTINGS.get(engine, {}).items():
+        got = runtime.get(field)
+        if got != expected_value:
+            raise ValueError(
+                f"POC {engine} requires {field}={expected_value}; resolved {got}"
             )

@@ -15,7 +15,7 @@ def _run():
             "wfms_mobile": "9876543210",
             "asterisk_call_id": "asterisk-41",
             "runtime_configuration": {
-                "stt_model": "latest_short",
+                "stt_model": "chirp_3",
                 "stt_language": "hi-IN,en-IN",
                 "llm_model": "gemini-3.8-flash",
                 "tts_model": "wavenet",
@@ -43,7 +43,7 @@ def test_summary_and_csv_expose_comparison_fields():
     run = _run()
     summary = summarize_run(run)
     assert summary.caller == "******3210"
-    assert summary.models == "latest_short + gemini-3.8-flash + wavenet"
+    assert summary.models == "chirp_3 + gemini-3.8-flash + wavenet"
     assert summary.language == "hi-IN,en-IN"
     assert summary.first_response_latency_ms == 315
     csv_text = calls_csv([run])

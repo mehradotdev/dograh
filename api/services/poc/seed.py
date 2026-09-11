@@ -105,8 +105,9 @@ STACKS = {
             "is_realtime": False,
             "stt": {
                 "provider": "google",
-                "model": "latest_short",
+                "model": "chirp_3",
                 "language": "hi-IN,en-IN",
+                "location": "eu",
             },
             "llm": {"provider": "google", "model": "gemini-3.8-flash"},
             "tts": {
