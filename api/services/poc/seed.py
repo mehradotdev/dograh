@@ -381,8 +381,9 @@ a concise explanation. Do not ask for another person's phone number. After answe
 ask whether the caller needs help with anything else. Route another request back to
 Support triage, a new issue to Create a support ticket, an approved human request to
 Human escalation, or a completed conversation to Successful completion. If the required lookup
-still fails after one safe retry and the caller declines or cannot use human escalation,
-route to Unable to complete.""",
+still fails after one safe retry, explain the limitation and offer human escalation. If
+the caller declines escalation and clearly needs nothing else, route to Successful
+completion. Route to Unable to complete only while an unresolved request remains.""",
                     "allow_interrupt": True,
                     "add_global_prompt": True,
                     "tool_uuids": tools(
@@ -720,11 +721,19 @@ async def seed(
     }
     ids: dict[str, int] = {}
     for name, stack in STACKS.items():
+        # Realtime services use the recorded transition as their sole goodbye.
+        # The cascading pipeline also generates the end-node response, so its
+        # transition recording would produce two farewells.
+        use_recorded_goodbye = stack["engine"] != "google_cascade"
         definition = _workflow_json(
             tool_uuids,
             stack["greeting"],
-            success_goodbye_recording_pk=success_goodbye_pk,
-            failure_goodbye_recording_pk=failure_goodbye_pk,
+            success_goodbye_recording_pk=(
+                success_goodbye_pk if use_recorded_goodbye else None
+            ),
+            failure_goodbye_recording_pk=(
+                failure_goodbye_pk if use_recorded_goodbye else None
+            ),
         )
         configurations = {
             "max_call_duration": 300,

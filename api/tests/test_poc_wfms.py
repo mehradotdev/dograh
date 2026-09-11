@@ -6,7 +6,6 @@ from api.services.poc.wfms import (
     WfmsAmbiguousCreate,
     WfmsClient,
     WfmsError,
-    WfmsPrivacyError,
 )
 from api.services.poc.wfms_models import CallerProfile, TicketDraft
 
@@ -53,7 +52,7 @@ async def test_caller_and_tickets_are_scoped_to_inbound_number():
 
 
 @pytest.mark.asyncio
-async def test_summary_rejects_wfms_wrong_ticket_bug():
+async def test_summary_discards_wfms_wrong_ticket_bug():
     def handler(request):
         if request.url.path.endswith("/get-ticket-details"):
             return httpx.Response(
@@ -71,8 +70,8 @@ async def test_summary_rejects_wfms_wrong_ticket_bug():
     client = WfmsClient(
         "9876543210", settings=settings(), transport=httpx.MockTransport(handler)
     )
-    with pytest.raises(WfmsPrivacyError):
-        await client.get_ticket_summary("HTIS-wfms-22")
+    assert await client.get_ticket_summary("HTIS-wfms-22") == []
+    assert client.last_exchange["discarded_mismatched_rows"] == 1
     await client.aclose()
 
 

@@ -170,9 +170,16 @@ class WfmsClient:
         if response.status_code != 200 or not isinstance(body, list):
             raise WfmsError("Unable to fetch ticket summary")
         rows = [TicketSummaryRow.model_validate(row) for row in body]
-        if any(row.ticket_id != ticket.request_id for row in rows):
-            raise WfmsPrivacyError("WFMS returned a summary for another ticket")
-        return rows
+        matching_rows = [row for row in rows if row.ticket_id == ticket.request_id]
+        discarded_rows = len(rows) - len(matching_rows)
+        if discarded_rows and self.last_exchange is not None:
+            # WFMS is known to return another ticket's history for some valid
+            # ticket numbers. Discard those rows instead of exposing them or
+            # turning an otherwise valid caller-scoped lookup into a hard
+            # failure. An empty history tells the agent that WFMS did not
+            # provide the requested timeline without leaking cross-ticket data.
+            self.last_exchange["discarded_mismatched_rows"] = discarded_rows
+        return matching_rows
 
     async def create_ticket(
         self, draft: TicketDraft, *, profile: CallerProfile | None

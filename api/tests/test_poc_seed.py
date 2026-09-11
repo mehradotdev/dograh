@@ -62,6 +62,14 @@ async def test_seed_refetches_new_workflows_before_reading_definitions(monkeypat
     )
     assert save_draft.await_count == 3
     assert publish_draft.await_count == 3
+    google_cascade_definition = save_draft.await_args_list[2].kwargs[
+        "workflow_definition"
+    ]
+    assert all(
+        "transition_speech_recording_id" not in edge["data"]
+        for edge in google_cascade_definition["edges"]
+        if edge["target"] in {"close", "failure"}
+    )
 
 
 def test_workflow_json_has_staged_support_flow_and_scoped_tools():
